@@ -4,122 +4,128 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from pathlib import Path
 
 import structlog
 from sqlalchemy import select
 
 from src.config import get_settings
-from src.models import Base, Ticket, TicketCategory, TicketStatus, TicketUrgency, engine
-from src.models.database import async_session_factory
+from src.models import Base, TicketCategory, TicketStatus, TicketUrgency, get_engine
+from src.models.database import get_session_factory
+from src.models.ticket import TicketModel
 
 logger = structlog.get_logger(__name__)
 settings = get_settings()
 
 SAMPLE_TICKETS = [
     {
-        "subject": "App crashes on login after latest update",
-        "body": "After updating to v2.3.1 the mobile app crashes every time I try to log in. "
-                "I've tried reinstalling but the issue persists. This is blocking our entire team.",
+        "content": "After updating to v2.3.1 the mobile app crashes every time I try to log in. "
+                   "I've tried reinstalling but the issue persists. This is blocking our entire team.",
+        "source": "email",
+        "source_id": "EMAIL-001",
         "expected_category": "bug",
-        "expected_urgency": "P1",
-        "expected_escalate": False,
+        "expected_urgency": "high",
     },
     {
-        "subject": "Feature request: Dark mode support",
-        "body": "It would be great if the dashboard supported a dark mode theme. "
-                "Many of our users work late hours and the bright theme is straining.",
+        "content": "It would be great if the dashboard supported a dark mode theme. "
+                   "Many of our users work late hours and the bright theme is straining.",
+        "source": "github",
+        "source_id": "GH-002",
         "expected_category": "feature_request",
-        "expected_urgency": "P3",
-        "expected_escalate": False,
+        "expected_urgency": "low",
     },
     {
-        "subject": "Invoice discrepancy on premium plan",
-        "body": "Our latest invoice shows $299/mo but we signed up for the $199/mo plan. "
-                "Can you please look into this? Our billing cycle ends Friday.",
+        "content": "Our latest invoice shows $299/mo but we signed up for the $199/mo plan. "
+                   "Can you please look into this? Our billing cycle ends Friday.",
+        "source": "email",
+        "source_id": "EMAIL-003",
         "expected_category": "billing",
-        "expected_urgency": "P2",
-        "expected_escalate": False,
+        "expected_urgency": "medium",
     },
     {
-        "subject": "Cannot access account after password reset",
-        "body": "I reset my password via the email link but the new password isn't accepted. "
-                "I'm now locked out and need access for a client demo tomorrow.",
-        "expected_category": "account",
-        "expected_urgency": "P1",
-        "expected_escalate": False,
+        "content": "I reset my password via the email link but the new password isn't accepted. "
+                   "I'm now locked out and need access for a client demo tomorrow.",
+        "source": "intercom",
+        "source_id": "IC-004",
+        "expected_category": "account_issue",
+        "expected_urgency": "high",
     },
     {
-        "subject": "Data export not including custom fields",
-        "body": "When I export tickets to CSV, the custom fields we added are missing "
-                "from the export. Is this a known issue?",
+        "content": "When I export tickets to CSV, the custom fields we added are missing "
+                   "from the export. Is this a known issue?",
+        "source": "api",
+        "source_id": "API-005",
         "expected_category": "bug",
-        "expected_urgency": "P2",
-        "expected_escalate": False,
+        "expected_urgency": "medium",
     },
     {
-        "subject": "Integration with Jira suddenly stopped working",
-        "body": "Our Jira integration was working fine until yesterday. Now tickets are not "
-                "syncing. This affects our entire engineering workflow. No changes on our end.",
+        "content": "Our Jira integration was working fine until yesterday. Now tickets are not "
+                   "syncing. This affects our entire engineering workflow. No changes on our end.",
+        "source": "email",
+        "source_id": "EMAIL-006",
         "expected_category": "bug",
-        "expected_urgency": "P0",
-        "expected_escalate": True,
+        "expected_urgency": "critical",
     },
     {
-        "subject": "How to set up SSO with Okta?",
-        "body": "We'd like to enable SSO using Okta for our organization. "
-                "Could you share the setup documentation or walk us through it?",
-        "expected_category": "general",
-        "expected_urgency": "P3",
-        "expected_escalate": False,
+        "content": "We'd like to enable SSO using Okta for our organization. "
+                   "Could you share the setup documentation or walk us through it?",
+        "source": "intercom",
+        "source_id": "IC-007",
+        "expected_category": "usage_help",
+        "expected_urgency": "low",
     },
     {
-        "subject": "SECURITY: Potential data leak in API response",
-        "body": "We noticed that the /api/v2/users endpoint is returning data from other "
-                "organizations in the response. This is a critical security issue that "
-                "needs immediate attention. We have screenshots.",
+        "content": "We noticed that the /api/v2/users endpoint is returning data from other "
+                   "organizations in the response. This is a critical security issue that "
+                   "needs immediate attention. We have screenshots.",
+        "source": "email",
+        "source_id": "EMAIL-008",
         "expected_category": "bug",
-        "expected_urgency": "P0",
-        "expected_escalate": True,
+        "expected_urgency": "critical",
     },
     {
-        "subject": "Request to increase API rate limit",
-        "body": "Our automation scripts are hitting the 1000 req/min limit. "
-                "Could we get an increase to 5000? Happy to provide justification.",
+        "content": "Our automation scripts are hitting the 1000 req/min limit. "
+                   "Could we get an increase to 5000? Happy to provide justification.",
+        "source": "api",
+        "source_id": "API-009",
         "expected_category": "feature_request",
-        "expected_urgency": "P3",
-        "expected_escalate": False,
+        "expected_urgency": "low",
     },
     {
-        "subject": "Billing portal shows wrong subscription tier",
-        "body": "The billing portal shows we're on the free tier, but we're paying for "
-                "enterprise. We need this fixed before our audit next week.",
+        "content": "The billing portal shows we're on the free tier, but we're paying for "
+                   "enterprise. We need this fixed before our audit next week.",
+        "source": "email",
+        "source_id": "EMAIL-010",
         "expected_category": "billing",
-        "expected_urgency": "P1",
-        "expected_escalate": False,
+        "expected_urgency": "high",
     },
 ]
 
 
 async def seed() -> None:
     """Insert sample tickets into the database."""
+    engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    async with async_session_factory() as session:
+    session_factory = get_session_factory()
+    async with session_factory() as session:
         # Check if already seeded
-        existing = (await session.execute(select(Ticket))).scalars().all()
+        existing = (await session.execute(select(TicketModel))).scalars().all()
         if existing:
             logger.info("seed.already_seeded", count=len(existing))
             return
 
         for t in SAMPLE_TICKETS:
-            ticket = Ticket(
-                subject=t["subject"],
-                body=t["body"],
-                category=TicketCategory(t["expected_category"]),
-                urgency=TicketUrgency(t["expected_urgency"]),
-                status=TicketStatus.OPEN,
+            ticket = TicketModel(
+                id=str(uuid.uuid4()),
+                content=t["content"],
+                source=t["source"],
+                source_id=t["source_id"],
+                category=t["expected_category"],
+                urgency=t["expected_urgency"],
+                status=TicketStatus.OPEN.value,
             )
             session.add(ticket)
 
@@ -132,11 +138,11 @@ async def seed() -> None:
     eval_tickets = [
         {
             "id": i + 1,
-            "subject": t["subject"],
-            "body": t["body"],
+            "content": t["content"],
+            "source": t["source"],
+            "source_id": t["source_id"],
             "expected_category": t["expected_category"],
             "expected_urgency": t["expected_urgency"],
-            "expected_escalate": t["expected_escalate"],
         }
         for i, t in enumerate(SAMPLE_TICKETS)
     ]

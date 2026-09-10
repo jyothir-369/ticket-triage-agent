@@ -20,6 +20,7 @@ from src.models.schemas import (
     TicketClassification,
     TicketMetadata,
     TicketStatus,
+    TraceStep,
     TriageTrace,
     UrgencyLevel,
 )

@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agent.graph import run_triage
 from src.config import get_settings
-from src.models.database import Base, engine, get_db_session
+from src.models.database import Base, get_db_session, get_engine
 from src.models.schemas import (
     DashboardMetrics,
     TicketCategory,
@@ -21,13 +21,12 @@ from src.models.schemas import (
     UrgencyLevel,
 )
 from src.models.ticket import (
-    Ticket as DBTicket,
+    TicketModel,
     TicketCategory as DBTicketCategory,
     TicketStatus as DBTicketStatus,
     TicketUrgency as DBTicketUrgency,
 )
-from src.models.trace import TriageTrace as DBTriageTrace
-from src.models.trace import TraceStep as DBTraceStep
+from src.models.trace import TraceModel
 
 logger = structlog.get_logger(__name__)
 settings = get_settings()
@@ -39,6 +38,7 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("api.startup", db=settings.database_url.split("@")[-1])
@@ -84,7 +84,7 @@ async def triage_ticket(
 ):
     """Run the full triage pipeline on a ticket."""
     # Fetch ticket from DB
-    result = await db.execute(select(DBTicket).where(DBTicket.id == ticket_id))
+    result = await db.execute(select(TicketModel).where(TicketModel.id == str(ticket_id)))
     ticket = result.scalar_one_or_none()
 
     if ticket is None:
@@ -93,68 +93,30 @@ async def triage_ticket(
     # Run the agent
     outcome = await run_triage(
         ticket_id=ticket.id,
-        subject=ticket.subject,
-        body=ticket.body,
+        subject=ticket.content[:100],
+        body=ticket.content,
     )
 
     # Update ticket in DB
     ticket.category = outcome["category"]
     ticket.urgency = outcome["urgency"]
     ticket.confidence = outcome["confidence"]
-    ticket.drafted_response = outcome["drafted_response"]
+    ticket.draft_text = outcome["drafted_response"]
 
     if outcome["decision"] == "escalate":
-        ticket.status = DBTicketStatus.ESCALATED
+        ticket.status = DBTicketStatus.ESCALATED.value
     else:
-        ticket.status = DBTicketStatus.TRIAGED
+        ticket.status = DBTicketStatus.RESOLVED.value
 
-    # Persist trace
-    trace = DBTriageTrace(
+    # Persist trace step
+    trace = TraceModel(
         ticket_id=ticket.id,
+        step="triage",
         status=outcome["decision"],
-        total_steps=4,
-        final_decision=outcome["decision"],
-        latency_ms=outcome["latency_ms"],
+        duration_ms=outcome["latency_ms"],
     )
     db.add(trace)
     await db.flush()
-
-    # Add trace steps
-    steps = [
-        DBTraceStep(
-            trace_id=trace.id,
-            step_type="classify",
-            order=1,
-            input_summary=f"{ticket.subject[:100]}",
-            output_summary=f"category={outcome['category']}, urgency={outcome['urgency']}",
-            latency_ms=outcome["latency_ms"] // 4,
-        ),
-        DBTraceStep(
-            trace_id=trace.id,
-            step_type="retrieve",
-            order=2,
-            input_summary="vector search",
-            output_summary="docs retrieved",
-            latency_ms=outcome["latency_ms"] // 4,
-        ),
-        DBTraceStep(
-            trace_id=trace.id,
-            step_type="draft",
-            order=3,
-            input_summary="context assembled",
-            output_summary=f"drafted {len(outcome['drafted_response'])} chars",
-            latency_ms=outcome["latency_ms"] // 4,
-        ),
-        DBTraceStep(
-            trace_id=trace.id,
-            step_type="escalation_check",
-            order=4,
-            input_summary=f"confidence={outcome['confidence']}",
-            output_summary=f"decision={outcome['decision']}",
-            latency_ms=outcome["latency_ms"] // 4,
-        ),
-    ]
-    db.add_all(steps)
 
     return TriageResponse(**outcome)
 
@@ -164,19 +126,14 @@ async def triage_ticket(
 # ---------------------------------------------------------------------------
 
 class TraceStepOut(BaseModel):
-    step_type: str
-    order: int
-    input_summary: str | None
-    output_summary: str | None
-    latency_ms: int | None
+    step: str
+    status: str
+    duration_ms: int | None
+    error: str | None
 
 
 class TraceOut(BaseModel):
-    ticket_id: int
-    status: str
-    total_steps: int
-    final_decision: str | None
-    latency_ms: int | None
+    ticket_id: str
     steps: list[TraceStepOut]
 
 
@@ -187,31 +144,23 @@ async def get_trace(
 ):
     """Retrieve the step-by-step decision trace for a ticket."""
     result = await db.execute(
-        select(DBTriageTrace).where(DBTriageTrace.ticket_id == ticket_id)
+        select(TraceModel)
+        .where(TraceModel.ticket_id == str(ticket_id))
+        .order_by(TraceModel.timestamp)
     )
-    trace = result.scalar_one_or_none()
+    steps = result.scalars().all()
 
-    if trace is None:
+    if not steps:
         raise HTTPException(status_code=404, detail=f"No trace for ticket {ticket_id}")
 
-    steps_result = await db.execute(
-        select(DBTraceStep).where(DBTraceStep.trace_id == trace.id).order_by(DBTraceStep.order)
-    )
-    steps = steps_result.scalars().all()
-
     return TraceOut(
-        ticket_id=trace.ticket_id,
-        status=trace.status,
-        total_steps=trace.total_steps,
-        final_decision=trace.final_decision,
-        latency_ms=trace.latency_ms,
+        ticket_id=str(ticket_id),
         steps=[
             TraceStepOut(
-                step_type=s.step_type.value,
-                order=s.order,
-                input_summary=s.input_summary,
-                output_summary=s.output_summary,
-                latency_ms=s.latency_ms,
+                step=s.step,
+                status=s.status,
+                duration_ms=s.duration_ms,
+                error=s.error,
             )
             for s in steps
         ],
@@ -228,60 +177,58 @@ async def triage_metrics(
 ):
     """Aggregate triage metrics for the dashboard."""
     # Counts
-    total = (await db.execute(select(func.count(DBTicket.id)))).scalar() or 0
-    triaged = (
+    total = (await db.execute(select(func.count(TicketModel.id)))).scalar() or 0
+    resolved = (
         await db.execute(
-            select(func.count(DBTicket.id)).where(DBTicket.status == DBTicketStatus.TRIAGED)
+            select(func.count(TicketModel.id)).where(
+                TicketModel.status == DBTicketStatus.RESOLVED.value
+            )
         )
     ).scalar() or 0
     escalated = (
         await db.execute(
-            select(func.count(DBTicket.id)).where(DBTicket.status == DBTicketStatus.ESCALATED)
+            select(func.count(TicketModel.id)).where(
+                TicketModel.status == DBTicketStatus.ESCALATED.value
+            )
         )
     ).scalar() or 0
 
     # Averages
     avg_conf = (
-        await db.execute(select(func.avg(DBTicket.confidence)).where(DBTicket.confidence.isnot(None)))
-    ).scalar()
-    avg_lat = (
-        await db.execute(select(func.avg(DBTriageTrace.latency_ms)))
+        await db.execute(
+            select(func.avg(TicketModel.confidence)).where(TicketModel.confidence.isnot(None))
+        )
     ).scalar()
 
     # Breakdowns
     cat_rows = (
         await db.execute(
-            select(DBTicket.category, func.count(DBTicket.id)).group_by(DBTicket.category)
+            select(TicketModel.category, func.count(TicketModel.id))
+            .where(TicketModel.category.isnot(None))
+            .group_by(TicketModel.category)
         )
     ).all()
     urg_rows = (
         await db.execute(
-            select(DBTicket.urgency, func.count(DBTicket.id)).group_by(DBTicket.urgency)
+            select(TicketModel.urgency, func.count(TicketModel.id))
+            .where(TicketModel.urgency.isnot(None))
+            .group_by(TicketModel.urgency)
         )
     ).all()
 
-    category_breakdown = {
-        str(row[0].value if hasattr(row[0], "value") else row[0]): row[1]
-        for row in cat_rows
-    }
-    urgency_breakdown = {
-        str(row[0].value if hasattr(row[0], "value") else row[0]): row[1]
-        for row in urg_rows
-    }
+    category_breakdown = {row[0]: row[1] for row in cat_rows}
+    urgency_breakdown = {row[0]: row[1] for row in urg_rows}
 
-    processed = triaged + escalated
     escalation_rate = escalated / total if total > 0 else 0.0
-    success_rate = triaged / total if total > 0 else 0.0
+    success_rate = resolved / total if total > 0 else 0.0
 
     return DashboardMetrics(
         total_tickets=total,
-        processed_tickets=processed,
+        processed_tickets=resolved + escalated,
         escalated_tickets=escalated,
         escalation_rate=round(escalation_rate, 4),
         avg_confidence=round(avg_conf, 4) if avg_conf else 0.0,
-        avg_steps=4.0,  # fixed for v1 (classify → retrieve → draft → escalate)
         success_rate=round(success_rate, 4),
         category_distribution=category_breakdown,
         urgency_distribution=urgency_breakdown,
-        p95_latency_ms=round(avg_lat, 1) if avg_lat else 0.0,
     )
