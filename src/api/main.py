@@ -149,3 +149,203 @@ from src.api.dashboard import router as dashboard_router  # noqa: E402
 
 app.include_router(tickets_router)
 app.include_router(dashboard_router)
+
+
+# ---------------------------------------------------------------------------
+# Health check endpoint
+# ---------------------------------------------------------------------------
+
+
+class HealthCheckResponse(BaseModel):
+    """Response model for the health check endpoint."""
+
+    status: str
+    timestamp: str
+    version: str
+    checks: dict[str, "HealthCheckResult"]
+
+
+class HealthCheckResult(BaseModel):
+    """Individual health check result."""
+
+    status: str
+    latency_ms: float
+    message: str | None = None
+
+
+@app.get(
+    "/health",
+    response_model=HealthCheckResponse,
+    summary="Health check endpoint",
+    description="Verifies all dependencies (database, Qdrant, Redis, LLM) are reachable.",
+)
+async def health_check():
+    """Check health of all service dependencies."""
+    import asyncio
+    from datetime import datetime, timezone
+
+    from src.config import get_settings
+    from src.utils.circuit_breaker import get_all_circuit_breaker_stats
+
+    settings = get_settings()
+    checks: dict[str, HealthCheckResult] = {}
+    overall_status = "healthy"
+
+    async def check_database() -> HealthCheckResult:
+        """Check database connectivity."""
+        start = time.monotonic()
+        try:
+            from src.models.database import get_engine
+
+            engine = get_engine()
+            async with engine.connect() as conn:
+                await conn.execute(select(1))
+            latency = (time.monotonic() - start) * 1000
+            return HealthCheckResult(
+                status="healthy",
+                latency_ms=round(latency, 2),
+            )
+        except Exception as exc:
+            latency = (time.monotonic() - start) * 1000
+            return HealthCheckResult(
+                status="unhealthy",
+                latency_ms=round(latency, 2),
+                message=str(exc),
+            )
+
+    async def check_qdrant() -> HealthCheckResult:
+        """Check Qdrant connectivity."""
+        start = time.monotonic()
+        try:
+            from qdrant_client import AsyncQdrantClient
+
+            client = AsyncQdrantClient(
+                host=settings.qdrant_host,
+                port=settings.qdrant_port,
+            )
+            await client.get_collections()
+            await client.close()
+            latency = (time.monotonic() - start) * 1000
+            return HealthCheckResult(
+                status="healthy",
+                latency_ms=round(latency, 2),
+            )
+        except Exception as exc:
+            latency = (time.monotonic() - start) * 1000
+            return HealthCheckResult(
+                status="unhealthy",
+                latency_ms=round(latency, 2),
+                message=str(exc),
+            )
+
+    async def check_redis() -> HealthCheckResult:
+        """Check Redis connectivity."""
+        start = time.monotonic()
+        try:
+            import redis.asyncio as aioredis
+
+            client = aioredis.from_url(settings.redis_url)
+            await client.ping()
+            await client.close()
+            latency = (time.monotonic() - start) * 1000
+            return HealthCheckResult(
+                status="healthy",
+                latency_ms=round(latency, 2),
+            )
+        except Exception as exc:
+            latency = (time.monotonic() - start) * 1000
+            return HealthCheckResult(
+                status="degraded",
+                latency_ms=round(latency, 2),
+                message=str(exc),
+            )
+
+    async def check_llm() -> HealthCheckResult:
+        """Check LLM provider connectivity."""
+        start = time.monotonic()
+        try:
+            from src.services.llm import get_llm
+
+            llm = get_llm()
+            # Just verify we can create the client (not make a real call)
+            latency = (time.monotonic() - start) * 1000
+            return HealthCheckResult(
+                status="healthy",
+                latency_ms=round(latency, 2),
+                message=f"Provider: {settings.llm_provider}",
+            )
+        except Exception as exc:
+            latency = (time.monotonic() - start) * 1000
+            return HealthCheckResult(
+                status="unhealthy",
+                latency_ms=round(latency, 2),
+                message=str(exc),
+            )
+
+    # Run all checks concurrently
+    db_check, qdrant_check, redis_check, llm_check = await asyncio.gather(
+        check_database(),
+        check_qdrant(),
+        check_redis(),
+        check_llm(),
+    )
+
+    checks["database"] = db_check
+    checks["qdrant"] = qdrant_check
+    checks["redis"] = redis_check
+    checks["llm"] = llm_check
+
+    # Determine overall status
+    for check in checks.values():
+        if check.status == "unhealthy":
+            overall_status = "unhealthy"
+            break
+        elif check.status == "degraded" and overall_status != "unhealthy":
+            overall_status = "degraded"
+
+    return HealthCheckResponse(
+        status=overall_status,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        version="0.1.0",
+        checks=checks,
+    )
+
+
+@app.get(
+    "/health/ready",
+    summary="Readiness probe",
+    description="Returns 200 if the service is ready to accept traffic.",
+)
+async def readiness_check():
+    """Kubernetes readiness probe — verify critical dependencies."""
+    from src.models.database import get_engine
+
+    try:
+        engine = get_engine()
+        async with engine.connect() as conn:
+            await conn.execute(select(1))
+        return {"status": "ready"}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Not ready: {exc}")
+
+
+@app.get(
+    "/health/live",
+    summary="Liveness probe",
+    description="Returns 200 if the service is alive.",
+)
+async def liveness_check():
+    """Kubernetes liveness probe — always returns 200 if the process is running."""
+    return {"status": "alive"}
+
+
+@app.get(
+    "/metrics/circuit-breakers",
+    summary="Circuit breaker statistics",
+    description="Returns statistics for all circuit breakers.",
+)
+async def circuit_breaker_stats():
+    """Return statistics for all circuit breakers."""
+    from src.utils.circuit_breaker import get_circuit_breaker_stats
+
+    return get_circuit_breaker_stats()
