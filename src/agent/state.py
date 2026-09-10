@@ -67,6 +67,9 @@ class AgentState(TypedDict, total=False):
     loop_count: int
     """Current iteration count — incremented on each loop; breaks at max_loop_retries."""
 
+    tool_call_count: int
+    """Total number of failed tool/LLM calls — triggers escalation when > 3."""
+
     error_message: str
     """Set when a node encounters an unrecoverable error."""
 
