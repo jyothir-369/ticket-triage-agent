@@ -9,6 +9,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
 from src.config import get_settings
+from src.services.embedding import get_embedding_provider
 
 logger = structlog.get_logger(__name__)
 settings = get_settings()
@@ -72,16 +73,16 @@ async def search_similar_tickets(
 ) -> list[RetrievedDoc]:
     """Search Qdrant for tickets similar to `query_text`.
 
-    In production this would embed the query via the same model used at
-    ingest time. For the v1 scaffold we accept a pre-computed vector or
-    fall back to a placeholder so the pipeline stays end-to-end testable.
+    Embeds the query using the configured embedding provider, then
+    performs a vector similarity search against the Qdrant collection.
     """
     client = get_qdrant_client()
     ensure_collection()
 
-    # Placeholder: in production, embed query_text via OpenAI / local model.
-    # For scaffold, generate a zero-vector so the API contract is testable.
-    query_vector = [0.0] * VECTOR_SIZE
+    # Embed the query text using the configured provider
+    provider = get_embedding_provider(use_cache=True)
+    query_embeddings = await provider.embed([query_text])
+    query_vector = query_embeddings[0]
 
     try:
         results = client.query_points(

@@ -77,6 +77,26 @@ class Settings(BaseSettings):
         description="Redis connection URL for Inngest and caching.",
     )
 
+    # ── Embedding Provider ─────────────────────────────────────────────────────
+
+    embedding_provider: Literal["openai", "sentence_transformer"] | None = Field(
+        default=None,
+        description=(
+            "Embedding backend to use. When None, auto-selects based on "
+            "available API keys: 'openai' if OPENAI_API_KEY is set, "
+            "else 'sentence_transformer' as local fallback."
+        ),
+    )
+    embedding_model: str = Field(
+        default="text-embedding-ada-002",
+        description="OpenAI embedding model identifier (used when embedding_provider='openai').",
+    )
+    embedding_cache_ttl_seconds: int = Field(
+        default=86400,
+        ge=0,
+        description="TTL in seconds for cached embeddings (default: 24 hours).",
+    )
+
     # ── Agent Configuration ────────────────────────────────────────────────────
 
     confidence_threshold: float = Field(
