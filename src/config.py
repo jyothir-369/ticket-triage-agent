@@ -198,8 +198,8 @@ class Settings(BaseSettings):
     @field_validator("eval_tickets_path")
     @classmethod
     def _validate_eval_path(cls, v: str) -> str:
-        if not v.endswith(".json"):
-            raise ValueError("eval_tickets_path must point to a .json file")
+        if not v.endswith((".json", ".jsonl")):
+            raise ValueError("eval_tickets_path must point to a .json or .jsonl file")
         return v
 
     # ── Derived helpers ─────────────────────────────────────────────────────────
