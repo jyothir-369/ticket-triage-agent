@@ -14,22 +14,15 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
-from tenacity import (
-    RetryCallState,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
 
 from src.config import get_settings
-from src.models.schemas import TicketClassification, TicketCategory, UrgencyLevel
-from src.utils.circuit_breaker import CircuitBreakerOpen, get_circuit_breaker
+from src.models.schemas import TicketCategory, TicketClassification, UrgencyLevel
+from src.utils.circuit_breaker import CircuitBreakerOpen
 from src.utils.retry import RateLimitError
 
 logger = structlog.get_logger(__name__)
@@ -356,22 +349,21 @@ class TicketClassifier:
     # ── LLM call with retries ──────────────────────────────────────────────
 
     async def _call_llm_with_retry(self, messages: list[Any]) -> str:
-        """Call the LLM with retries on transient errors (429, 5xx, timeouts).
+        """Call the LLM with fallback support.
 
-        Uses exponential backoff with jitter: multiplier=2, min=1s, max=10s.
-        Retries on: ConnectionError, TimeoutError, RateLimitError, 5xx errors.
-        Circuit breaker opens after 5 failures in 60s.
+        Uses call_llm_with_fallback which handles primary/failover providers
+        automatically. Retries on transient errors with exponential backoff.
         """
-        from src.services.llm import call_llm
-
         import asyncio
+
+        from src.services.llm import call_llm_with_fallback
 
         last_exc: Exception | None = None
         retry_exceptions = (ConnectionError, TimeoutError, OSError, RateLimitError, CircuitBreakerOpen)
 
         for attempt in range(self.max_retries):
             try:
-                response = await call_llm(
+                response = await call_llm_with_fallback(
                     messages,
                     temperature=0.0,
                     max_tokens=512,
@@ -396,7 +388,6 @@ class TicketClassifier:
                             max_retries=self.max_retries,
                             remaining_time=exc.timeout - (time.monotonic() - exc.last_failure_time),
                         )
-                        # Wait the remaining time on the circuit breaker timeout
                         wait_time = max(wait_time, exc.timeout - (time.monotonic() - exc.last_failure_time))
 
                     elif isinstance(exc, RateLimitError):
@@ -690,14 +681,26 @@ def get_classifier() -> TicketClassifier:
     """Create and return a ``TicketClassifier`` using the current settings."""
     settings = get_settings()
 
-    if settings.llm_provider == "anthropic":
-        model_name = settings.anthropic_model
-    else:
-        model_name = settings.openai_model
+    # Read model name from settings based on provider
+    model_name = _get_model_for_provider(settings)
 
     return TicketClassifier(
         model_name=model_name,
-        timeout_seconds=10.0,
-        max_retries=3,
+        timeout_seconds=settings.classification_timeout_seconds,
+        max_retries=settings.llm_max_retries,
         confidence_threshold=settings.confidence_threshold,
     )
+
+
+def _get_model_for_provider(settings: Any) -> str:
+    """Return the model name for the configured LLM provider."""
+    provider = settings.llm_provider.lower()
+    if provider == "gemini":
+        return settings.gemini_model
+    elif provider == "openai":
+        return settings.openai_model
+    elif provider == "anthropic":
+        return settings.anthropic_model
+    elif provider == "openrouter":
+        return settings.openrouter_model
+    return settings.openai_model

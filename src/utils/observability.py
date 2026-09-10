@@ -20,25 +20,23 @@ Custom metrics:
 from __future__ import annotations
 
 import time
-from contextlib import contextmanager, nullcontext
-from typing import Any, Generator
+from collections.abc import Generator
+from contextlib import contextmanager
+from typing import Any
 
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.sdk.metrics import Counter, Histogram, MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import ConsoleSpanExporter, BatchSpanProcessor
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 
 from src.config import get_settings
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Configuration
 # ═══════════════════════════════════════════════════════════════════════════════
-
-settings = get_settings()
 
 SERVICE_NAME = "support-triage-agent"
 SERVICE_VERSION = "0.1.0"
@@ -47,13 +45,17 @@ SERVICE_VERSION = "0.1.0"
 # Resource — identifies this service in traces
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_RESOURCE = Resource.create(
-    {
-        "service.name": SERVICE_NAME,
-        "service.version": SERVICE_VERSION,
-        "deployment.environment": "development",
-    }
-)
+
+def _get_resource() -> Resource:
+    """Build the OTel Resource with the current environment from settings."""
+    settings = get_settings()
+    return Resource.create(
+        {
+            "service.name": SERVICE_NAME,
+            "service.version": SERVICE_VERSION,
+            "deployment.environment": settings.environment,
+        }
+    )
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Tracer Provider — console + optional OTLP
@@ -64,7 +66,8 @@ _trace_provider: TracerProvider | None = None
 
 def _build_tracer_provider() -> TracerProvider:
     """Create and configure the TracerProvider with console and OTLP exporters."""
-    provider = TracerProvider(resource=_RESOURCE)
+    settings = get_settings()
+    provider = TracerProvider(resource=_get_resource())
 
     # Always export to console for debugging
     provider.add_span_processor(
@@ -156,7 +159,7 @@ def _init_metrics_provider() -> None:
     reader = PeriodicExportingMetricReader(
         export_interval_millis=30_000,  # Export every 30 seconds
     )
-    provider = MeterProvider(resource=_RESOURCE, metric_readers=[reader])
+    provider = MeterProvider(resource=_get_resource(), metric_readers=[reader])
     metrics.set_meter_provider(provider)
 
     _meter = metrics.get_meter(SERVICE_NAME, SERVICE_VERSION)

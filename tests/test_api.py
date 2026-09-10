@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.ticket import TicketModel, TicketStatus as DBTicketStatus
+from src.models.ticket import TicketModel
+from src.models.ticket import TicketStatus as DBTicketStatus
 from src.models.trace import TraceModel
-
 
 # ── Health endpoints ───────────────────────────────────────────────────────────
 
@@ -160,7 +160,7 @@ async def test_triage_ticket_wrong_status(client: AsyncClient, db_session: Async
         content="Already processed",
         source="api",
         status=DBTicketStatus.RESOLVED.value,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     db_session.add(model)
     await db_session.flush()
@@ -178,7 +178,7 @@ async def test_get_trace(client: AsyncClient, db_session: AsyncSession):
         content="Trace test",
         source="api",
         status="pending",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     db_session.add(model)
 
@@ -186,7 +186,7 @@ async def test_get_trace(client: AsyncClient, db_session: AsyncSession):
         ticket_id=ticket_id,
         step="classify",
         status="completed",
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         data=json.dumps({"category": "bug"}),
     )
     db_session.add(trace)
@@ -216,7 +216,7 @@ async def test_approve_ticket(client: AsyncClient, db_session: AsyncSession):
         content="Escalated ticket",
         source="api",
         status=DBTicketStatus.ESCALATED.value,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     db_session.add(model)
     await db_session.flush()
@@ -239,7 +239,7 @@ async def test_approve_ticket_wrong_status(client: AsyncClient, db_session: Asyn
         content="Pending ticket",
         source="api",
         status="pending",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     db_session.add(model)
     await db_session.flush()
@@ -289,7 +289,7 @@ async def test_list_escalated_tickets(client: AsyncClient, db_session: AsyncSess
         content="Escalated for listing",
         source="api",
         status=DBTicketStatus.ESCALATED.value,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     db_session.add(model)
     await db_session.flush()

@@ -27,7 +27,8 @@ from __future__ import annotations
 import asyncio
 import enum
 import time
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 import structlog
 
@@ -282,7 +283,7 @@ class CircuitBreaker:
             self.record_failure()
             raise
 
-    def __enter__(self) -> "CircuitBreaker":
+    def __enter__(self) -> CircuitBreaker:
         """Enter context manager — check if circuit is open."""
         current_state = self.state
         if current_state == CircuitState.OPEN:

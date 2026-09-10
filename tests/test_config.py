@@ -9,7 +9,7 @@ from src.config import Settings, get_settings
 class TestSettingsDefaults:
     def test_default_llm_provider(self):
         s = Settings()
-        assert s.llm_provider == "openai"
+        assert s.llm_provider == "gemini"
 
     def test_default_confidence_threshold(self):
         s = Settings()
@@ -35,8 +35,14 @@ class TestSettingsDefaults:
 
 class TestSettingsValidators:
     def test_database_url_rejects_sync_driver(self):
+        # Test that truly invalid drivers are rejected (not auto-convertible)
         with pytest.raises(ValidationError, match="asyncpg or aiosqlite"):
-            Settings(database_url="postgresql://localhost/db")
+            Settings(database_url="mysql://localhost/db")
+
+    def test_database_url_auto_converts_postgresql(self):
+        # Test that postgresql:// is auto-converted to postgresql+asyncpg://
+        s = Settings(database_url="postgresql://user:pass@localhost/db")
+        assert s.database_url.startswith("postgresql+asyncpg://")
 
     def test_database_url_accepts_asyncpg(self):
         s = Settings(database_url="postgresql+asyncpg://user:pass@localhost/db")
@@ -59,7 +65,7 @@ class TestSettingsValidators:
             Settings(otlp_endpoint="localhost:4317")
 
     def test_eval_path_must_be_json(self):
-        with pytest.raises(ValidationError, match="\.json"):
+        with pytest.raises(ValidationError, match=r"\.json"):
             Settings(eval_tickets_path="./data/tickets.csv")
 
     def test_confidence_threshold_in_range(self):
@@ -104,3 +110,4 @@ class TestGetSettingsSingleton:
         s1 = get_settings()
         s2 = get_settings()
         assert s1 is s2
+

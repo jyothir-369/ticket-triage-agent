@@ -7,7 +7,6 @@ tools with all external dependencies mocked.
 from __future__ import annotations
 
 import json
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -28,7 +27,6 @@ from src.tools.registry import (
     get_tool_registry,
     reset_tool_registry,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures

@@ -6,13 +6,10 @@ These tests exercise the full API flow without mocking the agent pipeline
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
 
 from src.models.schemas import (
     DraftResponse,
@@ -21,7 +18,6 @@ from src.models.schemas import (
     UrgencyLevel,
 )
 from src.models.ticket import TicketModel
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # E2E: Full ticket lifecycle via API

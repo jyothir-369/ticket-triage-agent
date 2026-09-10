@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.models.schemas import TicketClassification, TicketCategory, UrgencyLevel
+from src.models.schemas import TicketCategory, TicketClassification, UrgencyLevel
 from src.services.classification import (
     CATEGORY_KEYWORDS,
     MODEL_COST_RATES,
@@ -21,7 +21,6 @@ from src.services.classification import (
     TokenUsage,
     get_classifier,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures

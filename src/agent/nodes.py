@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -781,7 +781,7 @@ async def finalize_node(state: AgentState) -> dict:
                 "trace": json.dumps(trace.to_dict(), default=str),
                 "status": final_status.value,
                 "loop_count": state.get("loop_count", 0),
-                "processed_at": datetime.now(timezone.utc),
+                "processed_at": datetime.now(UTC),
             },
         )
 

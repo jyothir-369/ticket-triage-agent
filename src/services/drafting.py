@@ -31,7 +31,7 @@ from src.models.schemas import (
     TicketClassification,
     UrgencyLevel,
 )
-from src.utils.circuit_breaker import CircuitBreakerOpen, get_circuit_breaker
+from src.utils.circuit_breaker import CircuitBreakerOpen
 from src.utils.retry import RateLimitError
 
 logger = structlog.get_logger(__name__)
@@ -449,22 +449,21 @@ class DraftGenerator:
     # ── LLM call with retries ──────────────────────────────────────────────
 
     async def _call_llm_with_retry(self, messages: list[Any]) -> str:
-        """Call the LLM with retries on transient errors (429, 5xx, timeouts).
+        """Call the LLM with fallback support.
 
-        Uses exponential backoff with jitter: multiplier=2, min=1s, max=10s.
-        Retries on: ConnectionError, TimeoutError, RateLimitError, 5xx errors.
-        Circuit breaker opens after 5 failures in 60s.
+        Uses call_llm_with_fallback which handles primary/failover providers
+        automatically. Retries on transient errors with exponential backoff.
         """
-        from src.services.llm import call_llm
-
         import asyncio
+
+        from src.services.llm import call_llm_with_fallback
 
         last_exc: Exception | None = None
         retry_exceptions = (ConnectionError, TimeoutError, OSError, RateLimitError, CircuitBreakerOpen)
 
         for attempt in range(self.max_retries):
             try:
-                response = await call_llm(
+                response = await call_llm_with_fallback(
                     messages,
                     temperature=0.3,
                     max_tokens=1024,
@@ -718,7 +717,6 @@ class DraftGenerator:
         retrieved_docs: list[RetrievedDocument],
     ) -> DraftResponse:
         """Rewrite the draft to fix invalid citations."""
-        from src.services.llm import call_llm
 
         rewrite_prompt = f"""\
 The previous draft had invalid citations that need to be fixed:
@@ -740,6 +738,8 @@ Original citations:
 """
 
         try:
+            from src.services.llm import call_llm_with_fallback
+
             # Re-use the same message structure
             user_msg = self._build_user_message(
                 ticket, classification, retrieved_docs
@@ -752,7 +752,7 @@ Original citations:
                 HumanMessage(content=user_msg),
             ]
 
-            raw_response = await call_llm(messages, temperature=0.3, max_tokens=1024)
+            raw_response = await call_llm_with_fallback(messages, temperature=0.3, max_tokens=1024)
             self._track_tokens_from_response(raw_response, messages)
 
             return self._parse_response(raw_response, retrieved_docs)
@@ -995,14 +995,22 @@ def get_draft_generator() -> DraftGenerator:
     """Create and return a ``DraftGenerator`` using the current settings."""
     settings = get_settings()
 
-    if settings.llm_provider == "anthropic":
+    # Read model name from settings based on provider
+    provider = settings.llm_provider.lower()
+    if provider == "gemini":
+        model_name = settings.gemini_model
+    elif provider == "openai":
+        model_name = settings.openai_model
+    elif provider == "anthropic":
         model_name = settings.anthropic_model
+    elif provider == "openrouter":
+        model_name = settings.openrouter_model
     else:
         model_name = settings.openai_model
 
     return DraftGenerator(
         model_name=model_name,
-        timeout_seconds=15.0,
-        max_retries=3,
+        timeout_seconds=settings.drafting_timeout_seconds,
+        max_retries=settings.llm_max_retries,
         max_rewrite_attempts=2,
     )

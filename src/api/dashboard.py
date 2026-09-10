@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from src.models.database import get_db_session
 from src.models.schemas import DashboardMetrics, RecentActivity
-from src.models.ticket import TicketModel, TicketStatus as DBTicketStatus
+from src.models.ticket import TicketModel
+from src.models.ticket import TicketStatus as DBTicketStatus
 from src.models.trace import TraceModel
 
 logger = structlog.get_logger(__name__)

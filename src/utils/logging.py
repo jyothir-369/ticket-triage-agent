@@ -12,16 +12,15 @@ from __future__ import annotations
 
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
 from structlog.contextvars import merge_contextvars
 from structlog.processors import (
     StackInfoRenderer,
-    TimeStamper,
-    format_exc_info,
     add_log_level,
+    format_exc_info,
 )
 from structlog.stdlib import (
     BoundLogger,
@@ -30,7 +29,6 @@ from structlog.stdlib import (
 )
 
 from src.config import get_settings
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Custom Processors
@@ -41,7 +39,7 @@ def _add_timestamp_utc(
     logger: Any, method_name: str, event_dict: dict[str, Any]
 ) -> dict[str, Any]:
     """Add ISO 8601 timestamp with timezone to log entries."""
-    event_dict["timestamp"] = datetime.now(timezone.utc).isoformat()
+    event_dict["timestamp"] = datetime.now(UTC).isoformat()
     return event_dict
 
 
@@ -260,7 +258,7 @@ class correlation_id_context:
         self.correlation_id = correlation_id
         self._token = None
 
-    def __enter__(self) -> "correlation_id_context":
+    def __enter__(self) -> correlation_id_context:
         from structlog.contextvars import bind_contextvars
         self._token = bind_contextvars(correlation_id=self.correlation_id)
         return self

@@ -18,7 +18,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # ROUGE-L implementation (pure Python, no external dependency)
 # ═══════════════════════════════════════════════════════════════════════════════

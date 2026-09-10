@@ -6,11 +6,6 @@ Pydantic application-layer schemas live in ``schemas``.
 
 # ── SQLAlchemy layer ───────────────────────────────────────────────────────────
 from src.models.database import Base, get_db_session, get_engine, get_session
-from src.models.ticket import TicketCategory as DBTicketCategory
-from src.models.ticket import TicketModel
-from src.models.ticket import TicketStatus as DBTicketStatus
-from src.models.ticket import TicketUrgency as DBTicketUrgency
-from src.models.trace import TraceModel
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 from src.models.schemas import (
@@ -29,6 +24,11 @@ from src.models.schemas import (
     TriageTrace,
     UrgencyLevel,
 )
+from src.models.ticket import TicketCategory as DBTicketCategory
+from src.models.ticket import TicketModel
+from src.models.ticket import TicketStatus as DBTicketStatus
+from src.models.ticket import TicketUrgency as DBTicketUrgency
+from src.models.trace import TraceModel
 
 # ── Backward-compat aliases (used by api/main.py, seed_db.py) ────────────────
 DBTicket = TicketModel

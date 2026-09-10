@@ -24,14 +24,13 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 import structlog
-from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PayloadSchemaType, VectorParams
-from sqlalchemy import text
 
 from src.config import get_settings
-from src.models import Base, DBTicketCategory, DBTicketStatus, DBTicketUrgency, get_engine
+from src.models import Base, DBTicketStatus, get_engine
 from src.models.database import get_session_factory
 from src.models.ticket import TicketModel
+from src.services.retrieval import get_qdrant_client
 
 logger = structlog.get_logger(__name__)
 settings = get_settings()
@@ -162,11 +161,7 @@ async def ensure_tables(force: bool = False) -> None:
 
 def ensure_qdrant_collection(force: bool = False) -> None:
     """Create the Qdrant collection with correct vector size (idempotent)."""
-    client = QdrantClient(
-        host=settings.qdrant_host,
-        port=settings.qdrant_port,
-        timeout=settings.qdrant_timeout,
-    )
+    client = get_qdrant_client()
 
     existing = [c.name for c in client.get_collections().collections]
     collection_name = settings.qdrant_collection
@@ -243,7 +238,7 @@ async def insert_sample_tickets(force: bool = False) -> int:
             await session.flush()
 
         # Check count
-        from sqlalchemy import select, func
+        from sqlalchemy import func, select
 
         count_q = await session.execute(select(func.count(TicketModel.id)))
         existing_count = count_q.scalar() or 0

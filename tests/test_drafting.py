@@ -16,8 +16,8 @@ from src.models.schemas import (
     DraftResponse,
     RetrievedDocument,
     Ticket,
-    TicketClassification,
     TicketCategory,
+    TicketClassification,
     UrgencyLevel,
 )
 from src.services.drafting import (
@@ -32,7 +32,6 @@ from src.services.drafting import (
     TokenUsage,
     get_draft_generator,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures

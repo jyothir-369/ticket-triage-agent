@@ -8,13 +8,12 @@ import structlog
 from langchain_core.tools import tool
 
 from src.config import get_settings
-from src.services.classification import TicketClassifier, get_classifier
+from src.services.classification import get_classifier
 from src.services.drafting import draft_response
 from src.services.retrieval import (
     RetrievedDoc,
     search_similar_tickets,
     search_tickets,
-    get_retriever,
 )
 
 logger = structlog.get_logger(__name__)

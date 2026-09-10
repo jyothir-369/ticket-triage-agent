@@ -310,10 +310,18 @@ class EmbeddingCache:
         if self._client is None:
             import redis.asyncio as aioredis
 
+            connect_kwargs: dict = {
+                "decode_responses": True,
+                "max_connections": settings.redis_max_connections,
+                "socket_connect_timeout": settings.redis_socket_timeout,
+            }
+            # Detect TLS for Upstash (rediss://)
+            if self._redis_url.startswith("rediss://"):
+                connect_kwargs["ssl_cert_reqs"] = "required"
+
             self._client = aioredis.from_url(
                 self._redis_url,
-                decode_responses=True,
-                socket_connect_timeout=5,
+                **connect_kwargs,
             )
             logger.info("embedding.cache.connected", redis_url=self._redis_url)
         return self._client
@@ -447,6 +455,111 @@ class CachedEmbeddingProvider(EmbeddingProvider):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Gemini Embedding Provider
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class GeminiEmbeddingProvider(EmbeddingProvider):
+    """Google Gemini embedding provider using gemini-embedding-001.
+
+    Outputs 1536 dimensions (matching OpenAI ada-002) via output_dimensionality
+    parameter for Qdrant collection compatibility.
+    """
+
+    BATCH_SIZE = 100
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gemini-embedding-001",
+        dimension: int = 1536,
+        circuit_breaker: CircuitBreaker | None = None,
+    ) -> None:
+        self._api_key = api_key
+        self._model = model
+        self._dimension = dimension
+        self._circuit_breaker = circuit_breaker or CircuitBreaker()
+
+    def get_dimension(self) -> int:
+        return self._dimension
+
+    @retry(
+        retry=retry_if_exception_type((ConnectionError, TimeoutError)),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=True,
+    )
+    async def _call_gemini_api(self, batch: list[str]) -> list[list[float]]:
+        """Call the Gemini embeddings API for a single batch."""
+        import httpx
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self._model}:embedContent?key={self._api_key}"
+
+        async with httpx.AsyncClient() as client:
+            # Gemini embedContent API supports batch embedding via batchEmbedContents
+            batch_url = f"https://generativelanguage.googleapis.com/v1beta/models/{self._model}:batchEmbedContents?key={self._api_key}"
+            payload = {
+                "requests": [
+                    {
+                        "model": f"models/{self._model}",
+                        "content": {"parts": [{"text": text}]},
+                        "output_dimensionality": self._dimension,
+                    }
+                    for text in batch
+                ]
+            }
+            response = await client.post(
+                batch_url,
+                json=payload,
+                timeout=30.0,
+            )
+            response.raise_for_status()
+
+        data = response.json()
+        embeddings = [item["embedding"]["values"] for item in data.get("embeddings", [])]
+        return embeddings
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """Embed texts with batching, retry, and circuit breaker protection."""
+        if not texts:
+            return []
+
+        if not self._circuit_breaker.allow_request():
+            raise CircuitBreakerOpenError(
+                "Circuit breaker is open — too many recent failures. "
+                f"Recover after {self._circuit_breaker.recovery_timeout_seconds}s."
+            )
+
+        all_embeddings: list[list[float]] = []
+
+        for i in range(0, len(texts), self.BATCH_SIZE):
+            batch = texts[i : i + self.BATCH_SIZE]
+            try:
+                batch_embeddings = await self._call_gemini_api(batch)
+                all_embeddings.extend(batch_embeddings)
+                self._circuit_breaker.record_success()
+            except CircuitBreakerOpenError:
+                raise
+            except Exception as exc:
+                self._circuit_breaker.record_failure()
+                logger.error(
+                    "embedding.gemini.batch_failed",
+                    batch_start=i,
+                    batch_size=len(batch),
+                    error=str(exc),
+                )
+                raise
+
+        logger.debug(
+            "embedding.gemini.complete",
+            total_texts=len(texts),
+            batches=(len(texts) + self.BATCH_SIZE - 1) // self.BATCH_SIZE,
+            dimension=self._dimension,
+        )
+        return all_embeddings
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Factory
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -454,7 +567,7 @@ class CachedEmbeddingProvider(EmbeddingProvider):
 def get_embedding_provider(
     *,
     use_cache: bool = True,
-    embedding_model: Literal["openai", "sentence_transformer"] | None = None,
+    embedding_model: Literal["openai", "sentence_transformer", "gemini"] | None = None,
 ) -> EmbeddingProvider:
     """Factory function that returns the configured embedding provider.
 
@@ -475,7 +588,9 @@ def get_embedding_provider(
 
     # Auto-detect based on available API keys
     if model is None:
-        if settings.openai_api_key:
+        if settings.gemini_api_key:
+            model = "gemini"
+        elif settings.openai_api_key:
             model = "openai"
         else:
             model = "sentence_transformer"
@@ -485,6 +600,20 @@ def get_embedding_provider(
         failure_window_seconds=60.0,
     )
 
+    if model == "gemini":
+        if not settings.gemini_api_key:
+            logger.warning(
+                "embedding.gemini.no_key_falling_back",
+                fallback="sentence_transformer",
+            )
+            model = "sentence_transformer"
+        else:
+            provider: EmbeddingProvider = GeminiEmbeddingProvider(
+                api_key=settings.gemini_api_key,
+                dimension=settings.embedding_vector_size,  # 1536 to match Qdrant collection
+                circuit_breaker=circuit_breaker,
+            )
+
     if model == "openai":
         if not settings.openai_api_key:
             logger.warning(
@@ -493,7 +622,7 @@ def get_embedding_provider(
             )
             model = "sentence_transformer"
         else:
-            provider: EmbeddingProvider = OpenAIEmbeddingProvider(
+            provider = OpenAIEmbeddingProvider(
                 api_key=settings.openai_api_key,
                 circuit_breaker=circuit_breaker,
             )

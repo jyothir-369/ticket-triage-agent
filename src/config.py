@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -30,16 +33,30 @@ class Settings(BaseSettings):
         description="SQLAlchemy async connection string for PostgreSQL.",
     )
     database_pool_size: int = Field(
-        default=20,
+        default=5,
         ge=1,
         le=100,
         description="Number of connections to keep in the async connection pool.",
     )
     database_max_overflow: int = Field(
-        default=10,
+        default=2,
         ge=0,
         le=50,
         description="Max extra connections beyond pool_size for burst traffic.",
+    )
+    database_ssl_mode: str = Field(
+        default="require",
+        description="SSL mode for PostgreSQL connections. Neon requires 'require'.",
+    )
+    database_use_nullpool: bool = Field(
+        default=False,
+        description="Set True for serverless Postgres (Neon) to avoid holding open connections.",
+    )
+    database_connect_timeout: int = Field(
+        default=30,
+        ge=5,
+        le=120,
+        description="Connection timeout in seconds for database pool.",
     )
 
     # ── Qdrant (Vector DB) ─────────────────────────────────────────────────────
@@ -70,6 +87,14 @@ class Settings(BaseSettings):
         default="tickets",
         description="Qdrant collection name used for ticket vector storage.",
     )
+    qdrant_url: str | None = Field(
+        default=None,
+        description="Qdrant Cloud URL (e.g. https://xxx.qdrant.io:6333). Overrides host/port.",
+    )
+    qdrant_api_key: str = Field(
+        default="",
+        description="Qdrant Cloud API key for authentication.",
+    )
     embedding_vector_size: int = Field(
         default=1536,
         ge=64,
@@ -79,7 +104,7 @@ class Settings(BaseSettings):
 
     # ── LLM Provider ────────────────────────────────────────────────────────────
 
-    llm_provider: Literal["openai", "anthropic"] = Field(
+    llm_provider: Literal["openai", "anthropic", "gemini", "openrouter"] = Field(
         default="openai",
         description="Which LLM backend to use. Swappable without touching agent logic.",
     )
@@ -91,6 +116,10 @@ class Settings(BaseSettings):
         default="gpt-4o",
         description="OpenAI model identifier.",
     )
+    openai_base_url: str | None = Field(
+        default=None,
+        description="Custom OpenAI API base URL (for proxied setups).",
+    )
     anthropic_api_key: str = Field(
         default="",
         description="Anthropic API key (required when llm_provider='anthropic').",
@@ -99,12 +128,64 @@ class Settings(BaseSettings):
         default="claude-sonnet-4-20250514",
         description="Anthropic model identifier.",
     )
+    anthropic_base_url: str | None = Field(
+        default=None,
+        description="Custom Anthropic API base URL (for proxied setups).",
+    )
+    gemini_api_key: str = Field(
+        default="",
+        description="Google Gemini API key (required when llm_provider='gemini').",
+    )
+    gemini_model: str = Field(
+        default="gemini-flash-latest",
+        description="Google Gemini model identifier.",
+    )
+    openrouter_api_key: str = Field(
+        default="",
+        description="OpenRouter API key (used as fallback or primary provider).",
+    )
+    openrouter_base_url: str = Field(
+        default="https://openrouter.ai/api/v1",
+        description="OpenRouter API base URL.",
+    )
+    openrouter_model: str = Field(
+        default="google/gemma-4-31b-it:free",
+        description="OpenRouter model identifier.",
+    )
+    llm_fallback_provider: Literal["openai", "anthropic", "gemini", "openrouter"] | None = Field(
+        default=None,
+        description="Fallback LLM provider when primary fails.",
+    )
+    llm_timeout_seconds: int = Field(
+        default=30,
+        ge=5,
+        le=120,
+        description="Timeout in seconds for LLM API calls.",
+    )
+    llm_max_retries: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum number of LLM retry attempts.",
+    )
 
     # ── Redis (background jobs / caching) ──────────────────────────────────────
 
     redis_url: str = Field(
         default="redis://localhost:6379/0",
-        description="Redis connection URL for Inngest and caching.",
+        description="Redis connection URL for caching and background jobs.",
+    )
+    redis_max_connections: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Maximum number of Redis connections in the pool.",
+    )
+    redis_socket_timeout: int = Field(
+        default=5,
+        ge=1,
+        le=30,
+        description="Redis socket timeout in seconds.",
     )
     retriever_cache_ttl_seconds: int = Field(
         default=300,
@@ -180,6 +261,13 @@ class Settings(BaseSettings):
         description="Timeout in seconds for vector retrieval operations.",
     )
 
+    # ── Environment ────────────────────────────────────────────────────────────
+
+    environment: Literal["development", "staging", "production"] = Field(
+        default="development",
+        description="Deployment environment.",
+    )
+
     # ── Observability (OpenTelemetry) ──────────────────────────────────────────
 
     otlp_endpoint: str = Field(
@@ -214,6 +302,9 @@ class Settings(BaseSettings):
     @field_validator("database_url")
     @classmethod
     def _validate_database_url(cls, v: str) -> str:
+        # Auto-convert postgresql:// to postgresql+asyncpg:// for async driver
+        if v.startswith("postgresql://"):
+            v = "postgresql+asyncpg://" + v[len("postgresql://"):]
         if not v.startswith(("postgresql+asyncpg://", "sqlite+aiosqlite://")):
             raise ValueError(
                 "database_url must use the asyncpg or aiosqlite driver "
@@ -248,6 +339,63 @@ class Settings(BaseSettings):
         if not v.endswith((".json", ".jsonl")):
             raise ValueError("eval_tickets_path must point to a .json or .jsonl file")
         return v
+
+    # ── Model post-init validation ─────────────────────────────────────────────
+
+    @model_validator(mode="after")
+    def validate_environment(self) -> Settings:
+        """Validate configuration on every Settings instantiation."""
+        # Check production requirements
+        if self.environment == "production":
+            # Must have at least one LLM provider configured
+            has_llm = any([
+                self.gemini_api_key,
+                self.openai_api_key,
+                self.anthropic_api_key,
+                self.openrouter_api_key,
+            ])
+            if not has_llm:
+                raise ValueError(
+                    "In production, at least one LLM API key must be set "
+                    "(GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, or OPENROUTER_API_KEY)"
+                )
+
+            # Must not connect to localhost database
+            if "localhost" in self.database_url or "127.0.0.1" in self.database_url:
+                raise ValueError(
+                    "In production, DATABASE_URL must not point to localhost"
+                )
+
+        # Warnings (non-fatal)
+        if not self.qdrant_api_key and self.environment != "development":
+            logger.warning(
+                "QDRANT_API_KEY is empty — Qdrant Cloud features will not work "
+                "in %s environment",
+                self.environment,
+            )
+
+        if self.redis_url.startswith("redis://") and self.environment == "production":
+            logger.warning(
+                "REDIS_URL uses redis:// (unencrypted) in production. "
+                "Upstash requires rediss:// (TLS)."
+            )
+
+        # Log configured providers (never print actual keys)
+        providers = {
+            "gemini": bool(self.gemini_api_key),
+            "openai": bool(self.openai_api_key),
+            "anthropic": bool(self.anthropic_api_key),
+            "openrouter": bool(self.openrouter_api_key),
+        }
+        configured = [name for name, has_key in providers.items() if has_key]
+        logger.info(
+            "Configured LLM providers: %s (primary=%s, fallback=%s)",
+            ", ".join(configured) or "none",
+            self.llm_provider,
+            self.llm_fallback_provider or "none",
+        )
+
+        return self
 
     # ── Derived helpers ─────────────────────────────────────────────────────────
 

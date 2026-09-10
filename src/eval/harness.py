@@ -20,8 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -288,7 +287,7 @@ class EvalHarness:
         print("  EVALUATION REPORT — Support Ticket Triage Agent")
         print("=" * 72)
         print(f"  Total tickets evaluated: {metrics.total}")
-        print(f"  Run timestamp: {datetime.now(timezone.utc).isoformat()}")
+        print(f"  Run timestamp: {datetime.now(UTC).isoformat()}")
         print("-" * 72)
 
         # Overall metrics
@@ -304,7 +303,7 @@ class EvalHarness:
         # Confusion matrix
         cm = metrics.confusion_matrix.get("escalation", {})
         print("\n  ESCALATION CONFUSION MATRIX")
-        print(f"                    Predicted Positive  Predicted Negative")
+        print("                    Predicted Positive  Predicted Negative")
         print(f"    Actual Pos:     {cm.get('TP', 0):>17}  {cm.get('FN', 0):>17}")
         print(f"    Actual Neg:     {cm.get('FP', 0):>17}  {cm.get('TN', 0):>17}")
 
@@ -346,7 +345,7 @@ class EvalHarness:
             Complete evaluation summary.
         """
         return {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "fixture_path": str(self.fixture_path),
             "confidence_threshold": self.confidence_threshold,
             "concurrency": self.concurrency,
@@ -481,7 +480,7 @@ class EvalHarness:
 </head>
 <body>
     <h1>Triage Agent Evaluation Dashboard</h1>
-    <p class="subtitle">Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')} &middot; {metrics.total} tickets &middot; Threshold: {self.confidence_threshold}</p>
+    <p class="subtitle">Generated {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')} &middot; {metrics.total} tickets &middot; Threshold: {self.confidence_threshold}</p>
 
     <!-- Metric cards -->
     <div class="grid">

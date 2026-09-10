@@ -24,7 +24,6 @@ from src.eval.metrics import (
     rouge_l_f1,
 )
 
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -67,8 +66,7 @@ def eval_metrics(eval_harness: EvalHarness) -> AggregateMetrics:
     """
     import asyncio
 
-    loop = asyncio.get_event_loop()
-    return loop.run_until_complete(eval_harness.evaluate())
+    return asyncio.run(eval_harness.evaluate())
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

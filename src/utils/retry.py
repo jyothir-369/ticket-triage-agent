@@ -24,7 +24,8 @@ from __future__ import annotations
 import asyncio
 import functools
 import random
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 import structlog
 from tenacity import (
@@ -33,11 +34,6 @@ from tenacity import (
     retry_if_exception,
     retry_if_result,
     stop_after_attempt,
-    wait_exponential,
-    wait_random,
-    wait_combine,
-    before_sleep_log,
-    RetryError,
 )
 
 logger = structlog.get_logger(__name__)

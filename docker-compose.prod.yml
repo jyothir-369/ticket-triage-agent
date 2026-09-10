@@ -1,0 +1,54 @@
+# Production Docker Compose — uses external services (Neon, Upstash, Qdrant Cloud)
+# No local Postgres, Qdrant, or Redis — connect to cloud providers via .env.production
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up --build -d
+
+version: "3.9"
+
+services:
+  # ── Database Migration (one-shot) ────────────────────────────────────────────
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: triage-migrate
+    env_file: .env.production
+    command: alembic upgrade head
+    restart: "no"
+
+  # ── FastAPI Application ──────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: triage-app
+    restart: unless-stopped
+    env_file: .env.production
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  # ── Streamlit Dashboard ──────────────────────────────────────────────────────
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: triage-dashboard
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      API_URL: http://app:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      app:
+        condition: service_healthy

@@ -8,8 +8,6 @@ from __future__ import annotations
 import os
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 def test_api_get_constructs_correct_url():
     """api_get should construct the correct URL from API_BASE and endpoint."""
@@ -66,7 +64,7 @@ def test_api_post_returns_none_on_error():
 
 def test_login_default_credentials():
     """Default credentials should be admin/admin."""
-    from dashboard.app import DEFAULT_USERNAME, DEFAULT_PASSWORD
+    from dashboard.app import DEFAULT_PASSWORD, DEFAULT_USERNAME
 
     assert DEFAULT_USERNAME == "admin"
     assert DEFAULT_PASSWORD == "admin"
@@ -77,6 +75,7 @@ def test_login_env_override():
     with patch.dict(os.environ, {"DASHBOARD_USERNAME": "custom_user", "DASHBOARD_PASSWORD": "custom_pass"}):
         # Re-import to pick up env changes
         import importlib
+
         import dashboard.app
         importlib.reload(dashboard.app)
 
@@ -87,6 +86,7 @@ def test_login_env_override():
 def test_logout_clears_session_state():
     """logout() should clear authenticated state from session."""
     import streamlit as st
+
     from dashboard.app import logout
 
     # Mock streamlit session state

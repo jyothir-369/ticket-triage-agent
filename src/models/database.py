@@ -44,20 +44,74 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
 def get_engine() -> AsyncEngine:
-    """Return (and lazily create) the default async engine."""
+    """Return (and lazily create) the default async engine.
+
+    Supports both local Postgres and serverless Neon with appropriate
+    connection pool settings.
+    """
     global _engine
     if _engine is None:
+        from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+
+        from sqlalchemy.pool import NullPool
+
         from src.config import get_settings
         settings = get_settings()
-        _engine = create_async_engine(
-            settings.database_url,
-            echo=False,
-            pool_size=settings.database_pool_size,
-            max_overflow=settings.database_max_overflow,
-            pool_pre_ping=True,
-            pool_recycle=1800,
-            pool_timeout=30,
-        )
+        url = settings.database_url
+
+        # Handle SQLite (tests) — skip SSL and pool args
+        if url.startswith("sqlite+aiosqlite://"):
+            _engine = create_async_engine(
+                url,
+                echo=False,
+                pool_pre_ping=True,
+            )
+            return _engine
+
+        # For PostgreSQL: asyncpg doesn't understand libpq query params like
+        # sslmode, channel_binding, etc. Strip them from the URL and handle
+        # SSL via connect_args instead.
+        connect_args: dict = {}
+        if url.startswith("postgresql"):
+            parsed = urlparse(url)
+            query_params = parse_qs(parsed.query)
+
+            # Remove libpq-specific params that asyncpg doesn't understand
+            asyncpg_incompatible = {"sslmode", "channel_binding", "sslrootcert", "sslcert", "sslkey"}
+            cleaned_params = {
+                k: v for k, v in query_params.items()
+                if k.lower() not in asyncpg_incompatible
+            }
+
+            # Rebuild URL without incompatible params
+            clean_query = urlencode(cleaned_params, doseq=True) if cleaned_params else ""
+            url = urlunparse(parsed._replace(query=clean_query))
+
+            # Set SSL via connect_args if sslmode was in the URL
+            sslmode = query_params.get("sslmode", [None])[0]
+            if sslmode and sslmode != "disable":
+                connect_args["ssl"] = True
+
+        # Serverless Postgres (Neon): use NullPool to avoid holding connections
+        if settings.database_use_nullpool:
+            _engine = create_async_engine(
+                url,
+                echo=False,
+                poolclass=NullPool,
+                connect_args=connect_args,
+                pool_pre_ping=True,
+            )
+        else:
+            _engine = create_async_engine(
+                url,
+                echo=False,
+                pool_size=settings.database_pool_size,
+                max_overflow=settings.database_max_overflow,
+                pool_pre_ping=True,
+                pool_recycle=1800,
+                pool_timeout=settings.database_connect_timeout,
+                connect_args=connect_args,
+            )
     return _engine
 
 

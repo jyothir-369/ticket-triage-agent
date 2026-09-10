@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
+from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, Index, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, Index, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.database import Base
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Enums
@@ -148,7 +147,7 @@ class TicketModel(Base):
     )
 
     # ── Relationships ─────────────────────────────────────────────────────────────
-    traces: Mapped[list["TraceModel"]] = relationship(  # noqa: F821 — forward ref
+    traces: Mapped[list[TraceModel]] = relationship(  # noqa: F821 — forward ref
         back_populates="ticket", order_by="TraceModel.timestamp", cascade="all, delete-orphan"
     )
 

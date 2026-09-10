@@ -28,13 +28,12 @@ for full state persistence across restarts.
 from __future__ import annotations
 
 import asyncio
-import signal
 import time
 from collections.abc import AsyncIterator
 from typing import Any
 
 import structlog
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END, StateGraph
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -211,7 +210,7 @@ def _with_retry(node_fn):
 
 
 async def _handle_node_error(
-    state: "AgentState",
+    state: AgentState,
     node_name: str,
     exc: Exception,
 ) -> dict:
@@ -232,7 +231,6 @@ async def _handle_node_error(
     dict
         Partial state update to merge into ``AgentState``.
     """
-    from src.agent.state import AgentState  # noqa: F811 — local import for type
 
     ticket_id = state.get("ticket")
     ticket_id_str = str(ticket_id.id) if ticket_id else "unknown"
@@ -269,11 +267,11 @@ async def _handle_node_error(
 
 from src.agent.nodes import (  # noqa: E402
     classify_node,
-    retrieve_node,
     draft_node,
     escalate_check_node,
     escalate_node,
     finalize_node,
+    retrieve_node,
 )
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -281,7 +279,7 @@ from src.agent.nodes import (  # noqa: E402
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-async def _error_handler_node(state: "AgentState", node_name: str, exc: Exception) -> dict:
+async def _error_handler_node(state: AgentState, node_name: str, exc: Exception) -> dict:
     """Update state after a node fails: increment loop/tool counters and
     escalate when the retry budget is exhausted.
 
@@ -299,7 +297,6 @@ async def _error_handler_node(state: "AgentState", node_name: str, exc: Exceptio
     dict
         Partial state update to merge into ``AgentState``.
     """
-    from src.agent.state import AgentState  # noqa: F811 — local import for type
 
     ticket_id = state.get("ticket")
     ticket_id_str = str(ticket_id.id) if ticket_id else "unknown"
@@ -335,7 +332,7 @@ async def _error_handler_node(state: "AgentState", node_name: str, exc: Exceptio
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-async def _classify_wrapped(state: "AgentState") -> dict:
+async def _classify_wrapped(state: AgentState) -> dict:
     """classify_node with retry logic and error handling."""
     try:
         return await _with_retry(classify_node)(state)
@@ -343,7 +340,7 @@ async def _classify_wrapped(state: "AgentState") -> dict:
         return await _error_handler_node(state, "classify", exc)
 
 
-async def _retrieve_wrapped(state: "AgentState") -> dict:
+async def _retrieve_wrapped(state: AgentState) -> dict:
     """retrieve_node with retry logic and error handling."""
     try:
         return await _with_retry(retrieve_node)(state)
@@ -351,7 +348,7 @@ async def _retrieve_wrapped(state: "AgentState") -> dict:
         return await _error_handler_node(state, "retrieve", exc)
 
 
-async def _draft_wrapped(state: "AgentState") -> dict:
+async def _draft_wrapped(state: AgentState) -> dict:
     """draft_node with retry logic and error handling."""
     try:
         return await _with_retry(draft_node)(state)
@@ -359,7 +356,7 @@ async def _draft_wrapped(state: "AgentState") -> dict:
         return await _error_handler_node(state, "draft", exc)
 
 
-async def _escalate_check_wrapped(state: "AgentState") -> dict:
+async def _escalate_check_wrapped(state: AgentState) -> dict:
     """escalate_check_node with retry logic and error handling."""
     try:
         return await _with_retry(escalate_check_node)(state)
@@ -367,7 +364,7 @@ async def _escalate_check_wrapped(state: "AgentState") -> dict:
         return await _error_handler_node(state, "escalate_check", exc)
 
 
-async def _escalate_wrapped(state: "AgentState") -> dict:
+async def _escalate_wrapped(state: AgentState) -> dict:
     """escalate_node with retry logic and error handling."""
     try:
         return await _with_retry(escalate_node)(state)
@@ -375,7 +372,7 @@ async def _escalate_wrapped(state: "AgentState") -> dict:
         return await _error_handler_node(state, "escalate", exc)
 
 
-async def _finalize_wrapped(state: "AgentState") -> dict:
+async def _finalize_wrapped(state: AgentState) -> dict:
     """finalize_node with retry logic and error handling."""
     try:
         return await _with_retry(finalize_node)(state)
@@ -553,7 +550,7 @@ class AgentExecutor:
         self._graph = graph or triage_agent
         logger.debug("agent_executor.initialised")
 
-    async def run(self, ticket: "Ticket", config: dict | None = None) -> "AgentState":
+    async def run(self, ticket: Ticket, config: dict | None = None) -> AgentState:
         """Execute the triage graph for a single ticket and return the final state.
 
         **Concurrency**: acquires a semaphore slot (max 5 concurrent triage runs).
@@ -574,7 +571,7 @@ class AgentExecutor:
             state with escalation triggered on timeout.
         """
         from src.agent.state import AgentState  # noqa: F811
-        from src.models.schemas import TriageTrace, Ticket as TicketSchema
+        from src.models.schemas import TriageTrace
 
         ticket_id_str = str(ticket.id)
 
@@ -622,7 +619,7 @@ class AgentExecutor:
                     self._graph.ainvoke(initial_state, config=invoke_config),
                     timeout=settings.triage_timeout_seconds,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 elapsed_ms = int((time.monotonic() - start) * 1000)
                 logger.error(
                     "agent_executor.run.timeout",
@@ -662,14 +659,13 @@ class AgentExecutor:
                 _inflight_tasks.discard(task)
             release_triage_slot()
 
-    def _build_timeout_state(self, ticket: "Ticket", elapsed_ms: int) -> "AgentState":
+    def _build_timeout_state(self, ticket: Ticket, elapsed_ms: int) -> AgentState:
         """Build a degraded state when the triage pipeline times out."""
-        from src.agent.state import AgentState
         from src.models.schemas import (
             EscalationDecision,
+            TicketCategory,
             TicketClassification,
             TriageTrace,
-            TicketCategory,
             UrgencyLevel,
         )
 
@@ -705,14 +701,13 @@ class AgentExecutor:
             "messages": [],
         }
 
-    def _build_shutdown_state(self, ticket: "Ticket") -> "AgentState":
+    def _build_shutdown_state(self, ticket: Ticket) -> AgentState:
         """Build a degraded state when the system is shutting down."""
-        from src.agent.state import AgentState
         from src.models.schemas import (
             EscalationDecision,
+            TicketCategory,
             TicketClassification,
             TriageTrace,
-            TicketCategory,
             UrgencyLevel,
         )
 
@@ -748,7 +743,7 @@ class AgentExecutor:
             "messages": [],
         }
 
-    async def stream(self, ticket: "Ticket") -> AsyncIterator["AgentState"]:
+    async def stream(self, ticket: Ticket) -> AsyncIterator[AgentState]:
         """Stream state updates as each node in the triage pipeline completes.
 
         Parameters
@@ -851,7 +846,7 @@ async def run_triage(
         ``urgency``, ``confidence``, ``drafted_response``, ``decision``,
         ``escalation_reason``, ``latency_ms``.
     """
-    from src.models.schemas import Ticket, TicketStatus
+    from src.models.schemas import Ticket
 
     content = f"Subject: {subject}\n\nBody:\n{body}"
     ticket = Ticket(

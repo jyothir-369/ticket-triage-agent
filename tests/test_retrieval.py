@@ -2,22 +2,18 @@
 
 from __future__ import annotations
 
-import json
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.services.retrieval import (
-    QueryCache,
     RetrievedDoc,
     TicketRetriever,
     get_retriever,
-    search_similar_tickets,
     search_tickets,
 )
 from src.utils.circuit_breaker import CircuitBreaker
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CircuitBreaker
@@ -399,6 +395,7 @@ class TestSearchTicketsTool:
     async def test_search_tickets_returns_dicts(self):
         """Verify the search_tickets tool returns the expected dict format."""
         from unittest.mock import AsyncMock
+
         from src.models.schemas import RetrievedDocument
 
         mock_docs = [

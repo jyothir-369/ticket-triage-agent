@@ -46,7 +46,7 @@ class TraceModel(Base):
     )
 
     # ── Relationships ───────────────────────────────────────────────────────────
-    ticket: Mapped["TicketModel"] = relationship(  # noqa: F821 — forward ref
+    ticket: Mapped[TicketModel] = relationship(  # noqa: F821 — forward ref
         back_populates="traces", lazy="selectin"
     )
 

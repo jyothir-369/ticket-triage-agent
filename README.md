@@ -24,10 +24,10 @@ An AI agent that classifies incoming support tickets, retrieves related past tic
 | Language | Python 3.11+ |
 | Orchestration | LangGraph |
 | Backend API | FastAPI |
-| LLM Providers | OpenAI / Anthropic (swappable) |
-| Vector DB | Qdrant |
-| Relational DB | PostgreSQL |
-| Background Jobs | Inngest + Redis |
+| LLM Providers | Gemini (primary) / OpenRouter (fallback) / OpenAI / Anthropic |
+| Vector DB | Qdrant (local or Cloud) |
+| Relational DB | PostgreSQL (local or Neon) |
+| Caching | Redis (local or Upstash) |
 | Observability | OpenTelemetry |
 | Dashboard | Streamlit + Plotly |
 | Testing | Pytest |
@@ -459,27 +459,90 @@ Every triage decision is recorded with:
 
 ### Environment Variables
 
-```env
-# Database
-DATABASE_URL=postgresql+asyncpg://triage_user:triage_pass@localhost:5432/triage_db
+All configuration is managed via environment variables (or `.env` file). See `.env.example` for the complete list.
 
-# LLM Provider
-LLM_PROVIDER=openai
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o
+| Variable | Purpose | Example | Where to Get |
+|---|---|---|---|
+| `ENVIRONMENT` | Deployment env (development/staging/production) | `development` | — |
+| `DATABASE_URL` | PostgreSQL connection string | `postgresql+asyncpg://...` | [Neon](https://neon.tech) |
+| `DATABASE_SSL_MODE` | SSL mode for Postgres | `require` | — |
+| `DATABASE_USE_NULLPOOL` | Use NullPool for serverless Postgres | `true` | — |
+| `QDRANT_URL` | Qdrant Cloud URL | `https://xxx.qdrant.io:6333` | [Qdrant Cloud](https://cloud.qdrant.io) |
+| `QDRANT_API_KEY` | Qdrant Cloud API key | `xxx` | [Qdrant Cloud](https://cloud.qdrant.io) |
+| `LLM_PROVIDER` | Primary LLM provider | `gemini` | — |
+| `LLM_FALLBACK_PROVIDER` | Fallback LLM provider | `openrouter` | — |
+| `GEMINI_API_KEY` | Google Gemini API key | `xxx` | [AI Studio](https://aistudio.google.com/apikey) |
+| `OPENROUTER_API_KEY` | OpenRouter API key | `xxx` | [OpenRouter](https://openrouter.ai) |
+| `OPENAI_API_KEY` | OpenAI API key | `sk-...` | [OpenAI](https://platform.openai.com/api-keys) |
+| `ANTHROPIC_API_KEY` | Anthropic API key | `sk-ant-...` | [Anthropic](https://console.anthropic.com) |
+| `REDIS_URL` | Redis connection URL | `rediss://...` | [Upstash](https://upstash.com) |
+| `CONFIDENCE_THRESHOLD` | Escalation threshold | `0.7` | — |
+| `OTLP_ENDPOINT` | OpenTelemetry endpoint | `http://localhost:4317` | — |
 
-# Vector DB
-QDRANT_HOST=localhost
-QDRANT_PORT=6333
+### Validate Configuration
 
-# Agent Configuration
-CONFIDENCE_THRESHOLD=0.7
-MAX_LOOP_RETRIES=3
-TRIAGE_TIMEOUT_SECONDS=30
+```bash
+make validate              # Test all service connections
+python scripts/validate_config.py --strict   # Fail on warnings too
+```
 
-# Observability
-OTLP_ENDPOINT=http://localhost:4317
-LOG_LEVEL=INFO
+---
+
+## 🚀 Deploy to Production
+
+### Step-by-Step Provisioning
+
+1. **Neon PostgreSQL** — Sign up at [neon.tech](https://neon.tech), create a project, copy the connection string.
+2. **Upstash Redis** — Sign up at [upstash.com](https://upstash.com), create a Redis database, copy the `rediss://` URL.
+3. **Qdrant Cloud** — Sign up at [cloud.qdrant.io](https://cloud.qdrant.io), create a free cluster, copy the URL and API key.
+4. **Google Gemini** — Get an API key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
+5. **OpenRouter** (fallback) — Sign up at [openrouter.ai](https://openrouter.ai), get an API key.
+
+### Deploy
+
+```bash
+# Create production env file
+cp .env.example .env.production
+# Fill in all production values
+
+# Run migrations against Neon
+alembic upgrade head
+
+# Start with Docker Compose (production)
+docker compose -f docker-compose.prod.yml --env-file .env.production up --build -d
+```
+
+### Verify
+
+```bash
+python scripts/validate_config.py --strict
+curl http://localhost:8000/health
+```
+
+---
+
+## 💰 Free Tier Setup
+
+The entire stack can run for **$0/month** on free tiers:
+
+| Service | Free Tier | Limits |
+|---|---|---|
+| Neon PostgreSQL | 0.5 GB storage, 24/7 compute | 100 total connections |
+| Upstash Redis | 10K commands/day, 256 MB | — |
+| Qdrant Cloud | 1 GB storage, 1 cluster | Rate-limited |
+| Google Gemini | 15 RPM, 1M tokens/day | — |
+| OpenRouter | Free models (Gemma, Llama) | Rate-limited |
+
+### Local Development (Docker)
+
+```bash
+# Start local infrastructure
+make db-up
+make migrate
+make seed
+
+# Run the app
+make run
 ```
 
 ---

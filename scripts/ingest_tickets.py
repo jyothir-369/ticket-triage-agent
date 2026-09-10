@@ -23,13 +23,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
-import hashlib
 import json
 import re
 import sys
 import uuid
-from datetime import datetime, timezone
-from io import StringIO
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,17 +37,15 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 import structlog
-from pydantic import ValidationError
-from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct
-from sqlalchemy import select, func
+from sqlalchemy import select
 
 from src.config import get_settings
-from src.models import Base, get_engine
 from src.models.database import get_session_factory
-from src.models.schemas import Ticket, TicketMetadata, TicketStatus
+from src.models.schemas import TicketStatus
 from src.models.ticket import TicketModel
 from src.services.embedding import get_embedding_provider
+from src.services.retrieval import get_qdrant_client
 
 logger = structlog.get_logger(__name__)
 settings = get_settings()
@@ -150,7 +146,7 @@ def preprocess_ticket(raw: dict[str, str]) -> dict[str, Any]:
     source_id = raw.get("source_id") or raw.get("id") or raw.get("number")
 
     # Parse created_at if present
-    created_at = datetime.now(timezone.utc)
+    created_at = datetime.now(UTC)
     if raw.get("created_at"):
         try:
             created_at = datetime.fromisoformat(
@@ -395,11 +391,7 @@ async def index_into_qdrant(
 
     Returns {"indexed": N, "failed": M}.
     """
-    client = QdrantClient(
-        host=settings.qdrant_host,
-        port=settings.qdrant_port,
-        timeout=settings.qdrant_timeout,
-    )
+    client = get_qdrant_client()
 
     collection = settings.qdrant_collection
 
@@ -480,7 +472,7 @@ async def ingest(
 
     Returns a summary dict with counts and timing.
     """
-    start = datetime.now(timezone.utc)
+    start = datetime.now(UTC)
     logger.info(
         "ingest.start",
         total_raw=len(tickets_raw),
@@ -560,7 +552,7 @@ async def ingest(
         qdrant_result = {"indexed": len(processed), "failed": 0}
         logger.info("ingest.dry_run_skip_qdrant", count=qdrant_result["indexed"])
 
-    elapsed = (datetime.now(timezone.utc) - start).total_seconds()
+    elapsed = (datetime.now(UTC) - start).total_seconds()
 
     summary = {
         "total_raw": len(tickets_raw),

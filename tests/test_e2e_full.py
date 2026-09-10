@@ -13,25 +13,19 @@ Tests cover:
 from __future__ import annotations
 
 import json
-import time
-import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
 
 from src.models.schemas import (
     DraftResponse,
     TicketCategory,
     TicketClassification,
-    TicketStatus,
     UrgencyLevel,
 )
-from src.models.ticket import TicketModel, TicketStatus as DBTicketStatus
 from src.models.trace import TraceModel
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 1. HAPPY PATH: Confident classification → draft → approved
@@ -417,7 +411,7 @@ class TestAuditTrail:
                 ticket_id=ticket_id,
                 step="classify",
                 status="completed",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 duration_ms=150,
                 data=json.dumps({"category": "bug", "urgency": "high", "confidence": 0.92}),
             ),
@@ -425,7 +419,7 @@ class TestAuditTrail:
                 ticket_id=ticket_id,
                 step="retrieve",
                 status="completed",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 duration_ms=80,
                 data=json.dumps({"retrieval_count": 2}),
             ),
@@ -433,7 +427,7 @@ class TestAuditTrail:
                 ticket_id=ticket_id,
                 step="draft",
                 status="completed",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 duration_ms=200,
                 data=json.dumps({"draft_length": 150, "confidence": 0.85}),
             ),
@@ -441,7 +435,7 @@ class TestAuditTrail:
                 ticket_id=ticket_id,
                 step="escalate_check",
                 status="completed",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 duration_ms=10,
                 data=json.dumps({"should_escalate": False, "final_confidence": 0.89}),
             ),
@@ -449,7 +443,7 @@ class TestAuditTrail:
                 ticket_id=ticket_id,
                 step="finalize",
                 status="completed",
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 duration_ms=25,
                 data=json.dumps({"final_status": "resolved"}),
             ),
@@ -557,7 +551,7 @@ class TestObservability:
             ticket_id=ticket_id,
             step="test_step",
             status="completed",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
             data=json.dumps({"test": True}),
         )
         db_session.add(trace_row)
@@ -673,12 +667,8 @@ class TestEvaluationFramework:
     def test_eval_metrics_importable(self):
         """Evaluation metrics should be importable."""
         from src.eval.metrics import (
-            AggregateMetrics,
-            MetricResult,
-            aggregate_metrics,
-            compare_results,
-            rouge_l_f1,
             keyword_overlap,
+            rouge_l_f1,
         )
 
         # Test ROUGE-L

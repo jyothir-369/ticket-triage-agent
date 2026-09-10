@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -12,7 +12,6 @@ from src.models.schemas import (
     DashboardMetrics,
     DraftResponse,
     EscalationDecision,
-    RecentActivity,
     RetrievedDocument,
     StepStatus,
     Ticket,
@@ -24,7 +23,6 @@ from src.models.schemas import (
     TriageTrace,
     UrgencyLevel,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Enums
@@ -277,8 +275,8 @@ class TestEscalationDecision:
 class TestTriageTrace:
     def test_add_step_orders_by_timestamp(self):
         trace = TriageTrace(ticket_id=1)
-        s1 = TraceStep(step="a", timestamp=datetime(2025, 1, 1, 12, 0, 1, tzinfo=timezone.utc))
-        s2 = TraceStep(step="b", timestamp=datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc))
+        s1 = TraceStep(step="a", timestamp=datetime(2025, 1, 1, 12, 0, 1, tzinfo=UTC))
+        s2 = TraceStep(step="b", timestamp=datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC))
         trace.add_step(s1)
         trace.add_step(s2)
         assert trace.steps[0].step == "b"

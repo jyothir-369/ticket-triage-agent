@@ -14,7 +14,7 @@ import time
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -24,26 +24,12 @@ try:
 except ImportError:
     _HAS_OTEL = False
 from pydantic import BaseModel
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
-from src.agent.graph import AgentExecutor, shutdown as graceful_shutdown, is_shutting_down
+from src.agent.graph import is_shutting_down
+from src.agent.graph import shutdown as graceful_shutdown
 from src.config import get_settings
-from src.models.database import Base, get_db_session, get_engine
-from src.models.schemas import (
-    DashboardMetrics,
-    Ticket,
-    TicketCategory,
-    TicketStatus,
-    UrgencyLevel,
-)
-from src.models.ticket import (
-    TicketModel,
-    TicketCategory as DBTicketCategory,
-    TicketStatus as DBTicketStatus,
-    TicketUrgency as DBTicketUrgency,
-)
-from src.models.trace import TraceModel
+from src.models.database import Base, get_engine
 
 logger = structlog.get_logger(__name__)
 settings = get_settings()
@@ -56,12 +42,50 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup ──────────────────────────────────────────────────────────────
+    # Validate configuration
+    settings.check_config()
+
+    # Log environment info (redact sensitive values)
+    db_host = settings.database_url.split("@")[-1] if "@" in settings.database_url else "local"
+    qdrant_info = settings.qdrant_url or f"{settings.qdrant_host}:{settings.qdrant_port}"
+    redis_host = settings.redis_url.split("@")[-1] if "@" in settings.redis_url else settings.redis_url.split("://")[-1].split("/")[0]
+
+    logger.info(
+        "api.startup",
+        environment=settings.environment,
+        db_host=db_host,
+        qdrant=qdrant_info,
+        redis_host=redis_host,
+        llm_provider=settings.llm_provider,
+        llm_fallback=settings.llm_fallback_provider or "none",
+    )
+
+    # In production, fail fast if critical checks fail
+    if settings.environment == "production":
+        # Verify at least one LLM key is configured
+        has_llm = any([
+            settings.gemini_api_key,
+            settings.openai_api_key,
+            settings.anthropic_api_key,
+            settings.openrouter_api_key,
+        ])
+        if not has_llm:
+            raise RuntimeError(
+                "Production startup blocked: no LLM API key configured. "
+                "Set at least one of GEMINI_API_KEY, OPENAI_API_KEY, "
+                "ANTHROPIC_API_KEY, or OPENROUTER_API_KEY."
+            )
+        if "localhost" in settings.database_url:
+            raise RuntimeError(
+                "Production startup blocked: DATABASE_URL points to localhost."
+            )
+
     # NOTE: In production, run `alembic upgrade head` before starting the app.
     # The create_all below is a dev convenience fallback for SQLite / local dev.
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    logger.info("api.startup", db=settings.database_url.split("@")[-1])
+    logger.info("api.startup.db_ready", db=db_host)
 
     # Set up signal handlers for graceful shutdown
     loop = asyncio.get_running_loop()
@@ -193,8 +217,10 @@ async def general_exception_handler(request: Request, exc: Exception):
 # Include route modules
 # ---------------------------------------------------------------------------
 
-from src.api.tickets import router as tickets_router  # noqa: E402
+from datetime import UTC
+
 from src.api.dashboard import router as dashboard_router  # noqa: E402
+from src.api.tickets import router as tickets_router  # noqa: E402
 
 app.include_router(tickets_router)
 app.include_router(dashboard_router)
@@ -211,7 +237,8 @@ class HealthCheckResponse(BaseModel):
     status: str
     timestamp: str
     version: str
-    checks: dict[str, "HealthCheckResult"]
+    environment: str
+    checks: dict[str, HealthCheckResult]
 
 
 class HealthCheckResult(BaseModel):
@@ -220,6 +247,11 @@ class HealthCheckResult(BaseModel):
     status: str
     latency_ms: float
     message: str | None = None
+
+
+# Cache for LLM health check (avoid burning quota on every request)
+_llm_health_cache: dict[str, Any] = {"result": None, "timestamp": 0.0}
+_LLM_HEALTH_CACHE_TTL = 60.0  # seconds
 
 
 @app.get(
@@ -231,10 +263,9 @@ class HealthCheckResult(BaseModel):
 async def health_check():
     """Check health of all service dependencies."""
     import asyncio
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from src.config import get_settings
-    from src.utils.circuit_breaker import get_circuit_breaker_stats
 
     settings = get_settings()
     checks: dict[str, HealthCheckResult] = {}
@@ -263,22 +294,44 @@ async def health_check():
             )
 
     async def check_qdrant() -> HealthCheckResult:
-        """Check Qdrant connectivity."""
+        """Check Qdrant connectivity and collection vector size."""
         start = time.monotonic()
         try:
-            from qdrant_client import AsyncQdrantClient
+            from src.services.retrieval import get_qdrant_client
 
-            client = AsyncQdrantClient(
-                host=settings.qdrant_host,
-                port=settings.qdrant_port,
-            )
-            await client.get_collections()
-            await client.close()
-            latency = (time.monotonic() - start) * 1000
-            return HealthCheckResult(
-                status="healthy",
-                latency_ms=round(latency, 2),
-            )
+            client = get_qdrant_client()
+            collections = client.get_collections()
+            collection_names = [c.name for c in collections.collections]
+
+            # Verify the collection exists and has correct vector size
+            target_collection = settings.qdrant_collection
+            if target_collection in collection_names:
+                collection_info = client.get_collection(target_collection)
+                actual_size = collection_info.config.params.vectors.size
+                expected_size = settings.embedding_vector_size
+                if actual_size != expected_size:
+                    latency = (time.monotonic() - start) * 1000
+                    return HealthCheckResult(
+                        status="unhealthy",
+                        latency_ms=round(latency, 2),
+                        message=(
+                            f"Collection '{target_collection}' vector size mismatch: "
+                            f"expected {expected_size}, got {actual_size}"
+                        ),
+                    )
+                latency = (time.monotonic() - start) * 1000
+                return HealthCheckResult(
+                    status="healthy",
+                    latency_ms=round(latency, 2),
+                    message=f"Collection '{target_collection}' OK (vectors={actual_size})",
+                )
+            else:
+                latency = (time.monotonic() - start) * 1000
+                return HealthCheckResult(
+                    status="degraded",
+                    latency_ms=round(latency, 2),
+                    message=f"Collection '{target_collection}' not found (available: {collection_names})",
+                )
         except Exception as exc:
             latency = (time.monotonic() - start) * 1000
             return HealthCheckResult(
@@ -293,7 +346,14 @@ async def health_check():
         try:
             import redis.asyncio as aioredis
 
-            client = aioredis.from_url(settings.redis_url)
+            connect_kwargs: dict = {
+                "max_connections": settings.redis_max_connections,
+                "socket_connect_timeout": settings.redis_socket_timeout,
+            }
+            if settings.redis_url.startswith("rediss://"):
+                connect_kwargs["ssl_cert_reqs"] = "required"
+
+            client = aioredis.from_url(settings.redis_url, **connect_kwargs)
             await client.ping()
             await client.close()
             latency = (time.monotonic() - start) * 1000
@@ -310,26 +370,47 @@ async def health_check():
             )
 
     async def check_llm() -> HealthCheckResult:
-        """Check LLM provider connectivity."""
-        start = time.monotonic()
-        try:
-            from src.services.llm import get_llm
+        """Check LLM provider connectivity with cached real API call."""
+        global _llm_health_cache
+        import asyncio as _asyncio
 
-            llm = get_llm()
-            # Just verify we can create the client (not make a real call)
+        start = time.monotonic()
+
+        # Check cache
+        if (
+            _llm_health_cache["result"] is not None
+            and (start - _llm_health_cache["timestamp"]) < _LLM_HEALTH_CACHE_TTL
+        ):
+            return _llm_health_cache["result"]
+
+        try:
+            from langchain_core.messages import HumanMessage
+
+            from src.services.llm import call_llm_with_fallback
+
+            # Make a real (cheap) API call to verify connectivity
+            messages = [HumanMessage(content="Say 'ok' in one word.")]
+            response = await _asyncio.wait_for(
+                call_llm_with_fallback(messages, max_tokens=5, timeout_seconds=10),
+                timeout=15.0,
+            )
             latency = (time.monotonic() - start) * 1000
-            return HealthCheckResult(
+            result = HealthCheckResult(
                 status="healthy",
                 latency_ms=round(latency, 2),
                 message=f"Provider: {settings.llm_provider}",
             )
         except Exception as exc:
             latency = (time.monotonic() - start) * 1000
-            return HealthCheckResult(
+            result = HealthCheckResult(
                 status="unhealthy",
                 latency_ms=round(latency, 2),
-                message=str(exc),
+                message=f"LLM check failed: {type(exc).__name__}: {str(exc)[:100]}",
             )
+
+        # Cache the result
+        _llm_health_cache = {"result": result, "timestamp": start}
+        return result
 
     # Run all checks concurrently
     db_check, qdrant_check, redis_check, llm_check = await asyncio.gather(
@@ -354,8 +435,9 @@ async def health_check():
 
     return HealthCheckResponse(
         status=overall_status,
-        timestamp=datetime.now(timezone.utc).isoformat(),
+        timestamp=datetime.now(UTC).isoformat(),
         version="0.1.0",
+        environment=settings.environment,
         checks=checks,
     )
 
@@ -408,8 +490,8 @@ async def circuit_breaker_stats():
 async def resource_metrics():
     """Return resource usage and limit metrics."""
     from src.agent.graph import (
-        _triage_semaphore,
         _inflight_tasks,
+        _triage_semaphore,
         is_shutting_down,
     )
 

@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
-
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from src.config import Settings, get_settings
 from src.models.database import get_db_session
 from src.repository import TicketRepository

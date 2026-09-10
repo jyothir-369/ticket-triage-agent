@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.config import get_settings
-
 
 # ── Eval fixture format ────────────────────────────────────────────────────────
 
@@ -45,12 +42,8 @@ def test_eval_harness_importable():
 def test_eval_metrics_importable():
     """Evaluation metrics should be importable."""
     from src.eval.metrics import (
-        AggregateMetrics,
-        MetricResult,
-        aggregate_metrics,
-        compare_results,
-        rouge_l_f1,
         keyword_overlap,
+        rouge_l_f1,
     )
 
     # Test ROUGE-L
@@ -81,7 +74,7 @@ def test_eval_fixture_has_expected_fields():
     tickets = harness.load_tickets()
 
     for ticket in tickets:
-        assert "id" in ticket, f"Ticket missing 'id'"
+        assert "id" in ticket, "Ticket missing 'id'"
         assert "content" in ticket, f"Ticket {ticket.get('id')} missing 'content'"
         assert "expected_category" in ticket, f"Ticket {ticket.get('id')} missing 'expected_category'"
         assert "expected_urgency" in ticket, f"Ticket {ticket.get('id')} missing 'expected_urgency'"

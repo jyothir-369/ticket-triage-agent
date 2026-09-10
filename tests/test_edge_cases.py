@@ -4,10 +4,6 @@ duplicate ticket (idempotency).
 
 from __future__ import annotations
 
-import json
-import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
 from httpx import AsyncClient
 from pydantic import ValidationError
@@ -17,12 +13,10 @@ from src.models.schemas import (
     Ticket,
     TicketCategory,
     TicketClassification,
-    TicketStatus,
     UrgencyLevel,
 )
 from src.models.ticket import TicketModel
 from src.services.classification import TicketClassifier
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Empty ticket
@@ -302,9 +296,7 @@ class TestConfidenceBoundary:
         # confidence >= threshold (0.70 >= 0.70)
         import asyncio
 
-        result = asyncio.get_event_loop().run_until_complete(
-            escalate_check_node(state)
-        )
+        result = asyncio.run(escalate_check_node(state))
         assert result["should_escalate"] is False
 
     def test_below_threshold_escalates(self):
@@ -336,7 +328,5 @@ class TestConfidenceBoundary:
 
         import asyncio
 
-        result = asyncio.get_event_loop().run_until_complete(
-            escalate_check_node(state)
-        )
+        result = asyncio.run(escalate_check_node(state))
         assert result["should_escalate"] is True

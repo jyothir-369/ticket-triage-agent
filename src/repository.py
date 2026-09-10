@@ -9,11 +9,10 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.database import get_session
 from src.models.schemas import (
@@ -116,7 +115,7 @@ class TicketRepository:
         trace: dict[str, Any] | None = None,
     ) -> None:
         """Set the ticket lifecycle status and optionally append a trace entry."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         values: dict[str, Any] = {"status": status, "updated_at": now}
 
         if status in (TicketStatus.RESOLVED.value, TicketStatus.FAILED.value):
@@ -155,7 +154,7 @@ class TicketRepository:
         Also marks the ticket as ``awaiting_review`` or ``escalated``
         depending on the escalation decision.
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         should_escalate = escalation.get("should_escalate", False)
 
         values: dict[str, Any] = {

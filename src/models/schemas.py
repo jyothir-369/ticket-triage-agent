@@ -8,11 +8,10 @@ dashboard.  They are **not** SQLAlchemy ORM models (see ``ticket.py`` /
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Enums
@@ -107,7 +106,7 @@ class Ticket(BaseModel):
         description="Source-specific metadata (email, tags, custom fields).",
     )
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="Timestamp when the ticket was created (UTC).",
     )
     status: TicketStatus = Field(
@@ -133,7 +132,7 @@ class Ticket(BaseModel):
     @classmethod
     def _ensure_utc(cls, v: datetime) -> datetime:
         if v.tzinfo is None:
-            return v.replace(tzinfo=timezone.utc)
+            return v.replace(tzinfo=UTC)
         return v
 
 
@@ -355,7 +354,7 @@ class TraceStep(BaseModel):
         description="Current status of the step.",
     )
     timestamp: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="When this step started (UTC).",
     )
     duration_ms: int | None = Field(
@@ -378,7 +377,7 @@ class TraceStep(BaseModel):
     @classmethod
     def _ensure_utc(cls, v: datetime) -> datetime:
         if v.tzinfo is None:
-            return v.replace(tzinfo=timezone.utc)
+            return v.replace(tzinfo=UTC)
         return v
 
     @field_validator("error")
@@ -456,7 +455,7 @@ class EscalationDecision(BaseModel):
         if v is None:
             return None
         if v.tzinfo is None:
-            return v.replace(tzinfo=timezone.utc)
+            return v.replace(tzinfo=UTC)
         return v
 
     # ── Methods ─────────────────────────────────────────────────────────────────
@@ -562,7 +561,7 @@ class RecentActivity(BaseModel):
     @classmethod
     def _ensure_utc(cls, v: datetime) -> datetime:
         if v.tzinfo is None:
-            return v.replace(tzinfo=timezone.utc)
+            return v.replace(tzinfo=UTC)
         return v
 
 

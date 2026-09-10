@@ -16,7 +16,7 @@ import asyncio
 import json
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +47,7 @@ def generate_eval_report(
 
     Returns dict mapping report type to file path.
     """
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     paths: dict[str, Path] = {}
@@ -161,8 +161,8 @@ async def run_evaluation(
     if limit and limit < len(tickets):
         tickets = tickets[:limit]
         # Override harness fixture by writing temp file
-        import tempfile
         import os
+        import tempfile
 
         tmp = tempfile.NamedTemporaryFile(
             mode="w", suffix=".jsonl", delete=False, encoding="utf-8"
@@ -287,7 +287,7 @@ def main() -> None:
     print("=" * 60)
     for key, value in result.items():
         if key == "reports":
-            print(f"  Reports:")
+            print("  Reports:")
             for rtype, rpath in value.items():
                 print(f"    {rtype:.<20} {rpath}")
         elif key == "upload_url" and value:

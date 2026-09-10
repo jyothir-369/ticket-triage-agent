@@ -7,28 +7,19 @@ pipeline end-to-end with real database operations.
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
 
 from src.agent.graph import AgentExecutor, run_triage
-from src.agent.state import AgentState
 from src.models.schemas import (
     DraftResponse,
-    EscalationDecision,
     Ticket,
     TicketCategory,
     TicketClassification,
-    TicketStatus,
-    TriageTrace,
     UrgencyLevel,
 )
-from src.models.ticket import TicketModel
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Integration: Full agent pipeline with mocked LLM/Qdrant

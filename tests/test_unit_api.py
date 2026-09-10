@@ -6,16 +6,10 @@ trace retrieval, approval, escalation, and dashboard metrics.
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
 
 from src.models.ticket import TicketModel
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Health endpoints

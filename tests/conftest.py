@@ -10,10 +10,8 @@ Provides:
 
 from __future__ import annotations
 
-import asyncio
 import os
 from collections.abc import AsyncGenerator, Generator
-from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -24,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from src.api.main import app
-from src.config import Settings, get_settings
+from src.config import get_settings
 from src.models import Base, get_db_session
 from src.models.schemas import (
     Citation,
@@ -34,12 +32,9 @@ from src.models.schemas import (
     Ticket,
     TicketCategory,
     TicketClassification,
-    TicketMetadata,
-    TicketStatus,
     TriageTrace,
     UrgencyLevel,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Environment setup
@@ -69,14 +64,6 @@ def _clear_settings_cache():
 # ═══════════════════════════════════════════════════════════════════════════════
 # Event loop
 # ═══════════════════════════════════════════════════════════════════════════════
-
-
-@pytest.fixture(scope="session")
-def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
-    """Create a single event loop for the entire test session."""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -559,7 +546,6 @@ def sample_agent_state(
     sample_retrieved_docs,
 ):
     """A fully populated AgentState for testing node functions."""
-    from src.models.schemas import TriageTrace
 
     return {
         "ticket": sample_ticket,
@@ -594,7 +580,6 @@ def sample_agent_state_escalated(
     make_escalation,
 ):
     """An AgentState that should trigger escalation."""
-    from src.models.schemas import TriageTrace
 
     low_conf_class = TicketClassification(
         category=TicketCategory.BUG,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -18,10 +18,7 @@ from src.models.schemas import (
     TicketStatus,
     TraceStep,
 )
-from src.models.ticket import TicketModel
-from src.models.trace import TraceModel
 from src.repository import TicketRepository
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test fixtures
@@ -246,7 +243,7 @@ class TestGetTicketTrace:
 
     async def test_returns_ordered_steps(self, repo: TicketRepository):
         await repo.create_ticket(_make_ticket())
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         step_a = TraceStep(
             step="draft",

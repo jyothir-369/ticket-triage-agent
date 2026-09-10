@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic import BaseModel, Field
@@ -16,7 +15,6 @@ from src.tools.registry import (
     get_tool_registry,
     reset_tool_registry,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures

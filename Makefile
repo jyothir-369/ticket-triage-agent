@@ -3,7 +3,7 @@
 # =============================================================================
 
 .PHONY: install dev db-up db-down migrate seed test lint format run \
-        run-dashboard docker-up docker-down help eval
+        run-dashboard docker-up docker-down help eval validate
 
 PYTHON := python
 PIP := pip
@@ -42,6 +42,9 @@ migrate: ## Run Alembic migrations (alembic upgrade head)
 
 seed: ## Seed the database with sample tickets and eval fixtures
 	$(PYTHON) -m scripts.seed_db
+
+validate: ## Validate configuration and test all service connections
+	$(PYTHON) scripts/validate_config.py
 
 # ── Quality ─────────────────────────────────────────────────────────────────────
 test: ## Run the full test suite with coverage

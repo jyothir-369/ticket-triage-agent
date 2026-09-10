@@ -16,11 +16,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import time
-import uuid
-from collections import deque
-from dataclasses import dataclass, field
-from typing import Any, Literal, Optional
+from dataclasses import dataclass
+from typing import Any
 
 import structlog
 from langchain_core.tools import tool
@@ -42,6 +39,31 @@ from src.utils.circuit_breaker import CircuitBreakerOpen, get_circuit_breaker
 
 logger = structlog.get_logger(__name__)
 settings = get_settings()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Qdrant Client Factory
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def get_qdrant_client() -> QdrantClient:
+    """Return a QdrantClient configured for either local or Cloud deployment.
+
+    When settings.qdrant_url is set, connects to Qdrant Cloud using URL + API key.
+    Otherwise connects to local Qdrant using host/port settings.
+    """
+    if settings.qdrant_url:
+        return QdrantClient(
+            url=settings.qdrant_url,
+            api_key=settings.qdrant_api_key or None,
+            timeout=settings.qdrant_timeout,
+        )
+    return QdrantClient(
+        host=settings.qdrant_host,
+        port=settings.qdrant_port,
+        grpc_port=settings.qdrant_grpc_port,
+        timeout=settings.qdrant_timeout,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -79,10 +101,18 @@ class QueryCache:
         if self._client is None:
             import redis.asyncio as aioredis
 
+            connect_kwargs: dict[str, Any] = {
+                "decode_responses": True,
+                "max_connections": settings.redis_max_connections,
+                "socket_connect_timeout": settings.redis_socket_timeout,
+            }
+            # Detect TLS for Upstash (rediss://)
+            if self._redis_url.startswith("rediss://"):
+                connect_kwargs["ssl_cert_reqs"] = "required"
+
             self._client = aioredis.from_url(
                 self._redis_url,
-                decode_responses=True,
-                socket_connect_timeout=5,
+                **connect_kwargs,
             )
             logger.info("retrieval.cache.connected", redis_url=self._redis_url)
         return self._client
@@ -197,17 +227,10 @@ class TicketRetriever:
     def client(self) -> QdrantClient:
         """Lazy-initialise and return the Qdrant client singleton."""
         if self._client is None:
-            self._client = QdrantClient(
-                host=self._host,
-                port=self._port,
-                grpc_port=self._grpc_port,
-                timeout=self._timeout,
-            )
+            self._client = get_qdrant_client()
             logger.info(
                 "retrieval.client_created",
-                host=self._host,
-                port=self._port,
-                grpc_port=self._grpc_port,
+                url=settings.qdrant_url or f"{self._host}:{self._port}",
                 timeout=self._timeout,
             )
         return self._client
@@ -272,13 +295,30 @@ class TicketRetriever:
         """Execute *fn* with up to 3 retry attempts and exponential back-off.
 
         Uses multiplier=2, min=1s, max=10s with jitter.
+        Also handles HTTP 429 (rate limit) from Qdrant Cloud.
         """
         from tenacity import (
             retry,
             retry_if_exception_type,
             stop_after_attempt,
         )
+
         from src.utils.retry import wait_exponential_with_jitter
+
+        # Wrap to detect 429 rate limits
+        def _wrapped(*a, **kw):
+            try:
+                return fn(*a, **kw)
+            except Exception as exc:
+                exc_str = str(exc).lower()
+                if "429" in exc_str or "rate" in exc_str:
+                    logger.warning(
+                        "retrieval.qdrant_rate_limited",
+                        operation=operation,
+                        error=str(exc)[:200],
+                    )
+                    raise ConnectionError(f"Qdrant rate limit (429): {exc}") from exc
+                raise
 
         retrier = retry(
             retry=retry_if_exception_type((ConnectionError, TimeoutError, OSError)),
@@ -291,7 +331,7 @@ class TicketRetriever:
             ),
             reraise=True,
         )
-        return retrier(fn)(*args, **kwargs)
+        return retrier(_wrapped)(*args, **kwargs)
 
     # ── Search ──────────────────────────────────────────────────────────────
 
@@ -350,7 +390,7 @@ class TicketRetriever:
                 query_len=len(query),
             )
             return []
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._circuit_breaker.record_failure()
             logger.warning(
                 "retrieval.degraded.timeout",

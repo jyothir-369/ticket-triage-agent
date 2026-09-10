@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -17,17 +17,13 @@ from src.agent.graph import AgentExecutor
 from src.config import get_settings
 from src.models.database import get_db_session
 from src.models.schemas import (
-    DashboardMetrics,
     Ticket,
-    TicketCategory,
-    TicketStatus,
-    UrgencyLevel,
 )
 from src.models.ticket import (
     TicketModel,
-    TicketCategory as DBTicketCategory,
+)
+from src.models.ticket import (
     TicketStatus as DBTicketStatus,
-    TicketUrgency as DBTicketUrgency,
 )
 from src.models.trace import TraceModel
 from src.repository import TicketRepository
@@ -253,7 +249,7 @@ async def _run_triage_background(ticket_id: str) -> None:
         else:
             updates["status"] = DBTicketStatus.RESOLVED.value
 
-        updates["processed_at"] = datetime.now(timezone.utc)
+        updates["processed_at"] = datetime.now(UTC)
         await repo.update_ticket(ticket_id, updates)
 
         logger.info(
@@ -326,7 +322,7 @@ async def create_ticket(
             "tags": request.tags,
         }),
         status="pending",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     db.add(model)
     await db.flush()
@@ -498,7 +494,7 @@ async def approve_ticket(
             detail=f"Ticket {ticket_id} cannot be approved in status '{ticket.status}'",
         )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     ticket.status = DBTicketStatus.RESOLVED.value
     ticket.review_decision = "approved"
     ticket.reviewed_at = now
@@ -547,7 +543,7 @@ async def escalate_ticket(
     if ticket is None:
         raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     ticket.status = DBTicketStatus.ESCALATED.value
     ticket.escalation_reason = request.reason
     ticket.reviewed_at = now

@@ -1,10 +1,8 @@
 """Tests for the LangGraph triage agent — graph construction + AgentState."""
 
-import pytest
 
 from src.agent.graph import AgentExecutor, build_triage_graph, route_after_escalation_check
 from src.agent.state import AgentState
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Graph construction
