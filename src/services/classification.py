@@ -29,6 +29,8 @@ from tenacity import (
 
 from src.config import get_settings
 from src.models.schemas import TicketClassification, TicketCategory, UrgencyLevel
+from utils.circuit_breaker import CircuitBreakerOpen, get_circuit_breaker
+from utils.retry import RateLimitError
 
 logger = structlog.get_logger(__name__)
 
@@ -354,10 +356,18 @@ class TicketClassifier:
     # ── LLM call with retries ──────────────────────────────────────────────
 
     async def _call_llm_with_retry(self, messages: list[Any]) -> str:
-        """Call the LLM with retries on transient errors (429, 5xx, timeouts)."""
+        """Call the LLM with retries on transient errors (429, 5xx, timeouts).
+
+        Uses exponential backoff with jitter: multiplier=2, min=1s, max=10s.
+        Retries on: ConnectionError, TimeoutError, RateLimitError, 5xx errors.
+        Circuit breaker opens after 5 failures in 60s.
+        """
         from src.services.llm import call_llm
 
+        import asyncio
+
         last_exc: Exception | None = None
+        retry_exceptions = (ConnectionError, TimeoutError, OSError, RateLimitError, CircuitBreakerOpen)
 
         for attempt in range(self.max_retries):
             try:
@@ -365,48 +375,86 @@ class TicketClassifier:
                     messages,
                     temperature=0.0,
                     max_tokens=512,
+                    timeout_seconds=self.timeout_seconds,
                 )
                 # Track token usage from the response
                 self._track_tokens_from_response(response, messages)
                 return response
 
-            except TimeoutError as exc:
+            except retry_exceptions as exc:
                 last_exc = exc
-                logger.warning(
-                    "classify.timeout",
-                    attempt=attempt + 1,
-                    max_retries=self.max_retries,
-                    timeout=self.timeout_seconds,
-                )
-            except Exception as exc:
-                last_exc = exc
-                exc_name = type(exc).__name__
-                # Only retry on transient errors
-                if "rate" in exc_name.lower() or "429" in str(exc):
-                    wait_time = 2 ** attempt
-                    logger.warning(
-                        "classify.rate_limited",
-                        attempt=attempt + 1,
-                        wait_seconds=wait_time,
-                    )
-                    import asyncio
+                if attempt < self.max_retries - 1:
+                    import random
+                    wait_time = min(10.0, 1.0 * (2 ** attempt))
+                    jitter = wait_time * 0.3 * (2 * random.random() - 1)
+                    wait_time = max(0.01, wait_time + jitter)
 
-                    await asyncio.sleep(wait_time)
-                elif "500" in str(exc) or "502" in str(exc) or "503" in str(exc):
-                    wait_time = 2 ** attempt
-                    logger.warning(
-                        "classify.server_error",
-                        attempt=attempt + 1,
-                        wait_seconds=wait_time,
-                        status=exc,
-                    )
-                    import asyncio
+                    if isinstance(exc, CircuitBreakerOpen):
+                        logger.warning(
+                            "classify.circuit_breaker_open",
+                            attempt=attempt + 1,
+                            max_retries=self.max_retries,
+                            remaining_time=exc.timeout - (time.monotonic() - exc.last_failure_time),
+                        )
+                        # Wait the remaining time on the circuit breaker timeout
+                        wait_time = max(wait_time, exc.timeout - (time.monotonic() - exc.last_failure_time))
+
+                    elif isinstance(exc, RateLimitError):
+                        logger.warning(
+                            "classify.rate_limited",
+                            attempt=attempt + 1,
+                            wait_seconds=round(wait_time, 2),
+                            retry_after=exc.retry_after,
+                        )
+                        if exc.retry_after:
+                            wait_time = max(wait_time, exc.retry_after)
+
+                    elif isinstance(exc, TimeoutError):
+                        logger.warning(
+                            "classify.timeout",
+                            attempt=attempt + 1,
+                            max_retries=self.max_retries,
+                            timeout=self.timeout_seconds,
+                        )
+                    else:
+                        logger.warning(
+                            "classify.connection_error",
+                            attempt=attempt + 1,
+                            wait_seconds=round(wait_time, 2),
+                            error=str(exc),
+                        )
 
                     await asyncio.sleep(wait_time)
                 else:
-                    # Non-retryable error — raise immediately
-                    logger.error("classify.non_retryable_error", error=str(exc))
-                    raise
+                    logger.error(
+                        "classify.all_retries_exhausted",
+                        attempt=attempt + 1,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+
+            except Exception as exc:
+                # Non-retryable error — check for 5xx server errors
+                exc_str = str(exc)
+                if any(code in exc_str for code in ("500", "502", "503", "504")):
+                    last_exc = exc
+                    if attempt < self.max_retries - 1:
+                        import random
+                        wait_time = min(10.0, 1.0 * (2 ** attempt))
+                        jitter = wait_time * 0.3 * (2 * random.random() - 1)
+                        wait_time = max(0.01, wait_time + jitter)
+                        logger.warning(
+                            "classify.server_error",
+                            attempt=attempt + 1,
+                            wait_seconds=round(wait_time, 2),
+                            status=exc,
+                        )
+                        import asyncio
+                        await asyncio.sleep(wait_time)
+                        continue
+                # Non-retryable error — raise immediately
+                logger.error("classify.non_retryable_error", error=str(exc))
+                raise
 
         # All retries exhausted
         raise last_exc or RuntimeError("All retries exhausted.")

@@ -79,6 +79,10 @@ class CreateTicketResponse(BaseModel):
     ticket_id: str
     status: str
     created_at: str
+    is_duplicate: bool = Field(
+        default=False,
+        description="True if a ticket with the same source_id already existed.",
+    )
 
 
 class TriageResponse(BaseModel):
@@ -192,7 +196,17 @@ async def _run_triage_background(ticket_id: str) -> None:
     Updates the ticket status to PROCESSING before starting, and sets it
     to RESOLVED or ESCALATED on completion.  On failure, status is set
     to FAILED.
+
+    The AgentExecutor handles concurrency limits (semaphore) and total
+    timeout internally.
     """
+    from src.agent.graph import is_shutting_down
+
+    # Reject new tasks during shutdown
+    if is_shutting_down():
+        logger.warning("triage_bg.rejected_shutdown", ticket_id=ticket_id)
+        return
+
     repo = TicketRepository()
     try:
         await repo.update_ticket_status(ticket_id, "processing")
@@ -274,6 +288,32 @@ async def create_ticket(
     request: CreateTicketRequest,
     db: AsyncSession = Depends(get_db_session),
 ):
+    """Create a new support ticket.
+
+    **Idempotency**: if ``source_id`` is provided and a ticket with that
+    ``source_id`` already exists, returns the existing ticket (HTTP 200)
+    instead of creating a duplicate (HTTP 201).
+    """
+    # ── Idempotency check ────────────────────────────────────────────────────
+    if request.source_id:
+        existing_result = await db.execute(
+            select(TicketModel).where(TicketModel.source_id == request.source_id)
+        )
+        existing_ticket = existing_result.scalar_one_or_none()
+        if existing_ticket is not None:
+            logger.info(
+                "ticket.duplicate_detected",
+                source_id=request.source_id,
+                existing_ticket_id=existing_ticket.id,
+                source=request.source,
+            )
+            return CreateTicketResponse(
+                ticket_id=existing_ticket.id,
+                status=existing_ticket.status,
+                created_at=existing_ticket.created_at.isoformat(),
+                is_duplicate=True,
+            )
+
     ticket_id = str(uuid.uuid4())
 
     model = TicketModel(
@@ -297,6 +337,7 @@ async def create_ticket(
         ticket_id=ticket_id,
         status="pending",
         created_at=model.created_at.isoformat(),
+        is_duplicate=False,
     )
 
 

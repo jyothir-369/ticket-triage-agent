@@ -89,9 +89,12 @@ async def classify_node(state: AgentState) -> dict:
     """Classify the ticket into a category and urgency level.
 
     Calls :func:`src.services.classification.get_classifier`, updates
-    ``state["classification"]`` and appends a trace step.  On failure the
-    loop counter is incremented and escalation is triggered once the
-    retry budget is exhausted.
+    ``state["classification"]`` and appends a trace step.
+
+    **Graceful degradation**: if the LLM fails, the classifier's built-in
+    keyword-based heuristic fallback is used automatically, returning a
+    classification with confidence < 0.5.  This low confidence will trigger
+    escalation in the escalate_check node.  Logs the degradation event.
     """
     ticket_id = _ticket_id(state)
     log = logger.bind(ticket_id=ticket_id)
@@ -108,20 +111,39 @@ async def classify_node(state: AgentState) -> dict:
         result: TicketClassification = await classifier.classify(ticket.content)
 
         elapsed = _now_ms() - start
-        log.info(
-            "node.classify.success",
-            category=result.category.value,
-            urgency=result.urgency.value,
-            confidence=round(result.confidence, 4),
-            duration_ms=elapsed,
-        )
+
+        # Track whether heuristic fallback was used (confidence < 0.5 indicates fallback)
+        is_degraded = result.confidence < 0.5
+        degradation_reason = ""
+        if is_degraded:
+            degradation_reason = "LLM unavailable — used keyword heuristic fallback"
+            log.warning(
+                "node.classify.degraded_heuristic",
+                category=result.category.value,
+                urgency=result.urgency.value,
+                confidence=round(result.confidence, 4),
+                reason=degradation_reason,
+                duration_ms=elapsed,
+            )
+        else:
+            log.info(
+                "node.classify.success",
+                category=result.category.value,
+                urgency=result.urgency.value,
+                confidence=round(result.confidence, 4),
+                duration_ms=elapsed,
+            )
 
         _append_step(
             state,
             step_name="classify",
             status=StepStatus.COMPLETED,
             duration_ms=elapsed,
-            data=result.to_dict(),
+            data={
+                **result.to_dict(),
+                "degraded": is_degraded,
+                "degradation_reason": degradation_reason,
+            },
         )
 
         return {
@@ -135,6 +157,7 @@ async def classify_node(state: AgentState) -> dict:
         log.warning(
             "node.classify.failed",
             error=str(exc),
+            error_type=type(exc).__name__,
             loop_count=loop_count,
             duration_ms=elapsed,
         )
@@ -168,6 +191,11 @@ async def retrieve_node(state: AgentState) -> dict:
     Uses the ticket content (and optional classification filters) to
     retrieve relevant context documents.  Results are serialised into
     ``state["retrieved_docs"]``.
+
+    **Graceful degradation**: if Qdrant is unavailable (circuit breaker open,
+    timeout, connection error), returns an empty document list so the pipeline
+    continues with classification + template draft only.  Logs the degradation
+    event for monitoring.
     """
     ticket_id = _ticket_id(state)
     log = logger.bind(ticket_id=ticket_id)
@@ -212,19 +240,38 @@ async def retrieve_node(state: AgentState) -> dict:
         ]
 
         elapsed = _now_ms() - start
-        log.info(
-            "node.retrieve.success",
-            count=len(doc_dicts),
-            duration_ms=elapsed,
-        )
 
-        _append_step(
-            state,
-            step_name="retrieve",
-            status=StepStatus.COMPLETED,
-            duration_ms=elapsed,
-            data={"retrieval_count": len(doc_dicts)},
-        )
+        if not doc_dicts:
+            # Graceful degradation: Qdrant unavailable or returned no results
+            log.warning(
+                "node.retrieve.degraded_no_results",
+                duration_ms=elapsed,
+                reason="Qdrant returned empty results — continuing without RAG context",
+            )
+            _append_step(
+                state,
+                step_name="retrieve",
+                status=StepStatus.COMPLETED,
+                duration_ms=elapsed,
+                data={
+                    "retrieval_count": 0,
+                    "degraded": True,
+                    "degradation_reason": "qdrant_unavailable",
+                },
+            )
+        else:
+            log.info(
+                "node.retrieve.success",
+                count=len(doc_dicts),
+                duration_ms=elapsed,
+            )
+            _append_step(
+                state,
+                step_name="retrieve",
+                status=StepStatus.COMPLETED,
+                duration_ms=elapsed,
+                data={"retrieval_count": len(doc_dicts)},
+            )
 
         return {
             "retrieved_docs": doc_dicts,
@@ -234,28 +281,34 @@ async def retrieve_node(state: AgentState) -> dict:
     except Exception as exc:
         elapsed = _now_ms() - start
         loop_count = state.get("loop_count", 0) + 1
+
+        # Graceful degradation: log and continue without RAG context
         log.warning(
-            "node.retrieve.failed",
+            "node.retrieve.degraded_error",
             error=str(exc),
+            error_type=type(exc).__name__,
             loop_count=loop_count,
             duration_ms=elapsed,
+            reason="Qdrant failed — continuing without RAG context",
         )
 
         _append_step(
             state,
             step_name="retrieve",
-            status=StepStatus.FAILED,
+            status=StepStatus.COMPLETED,  # Mark as completed (degraded) not failed
             duration_ms=elapsed,
-            error=str(exc),
+            data={
+                "retrieval_count": 0,
+                "degraded": True,
+                "degradation_reason": str(exc),
+            },
         )
 
-        should_escalate = loop_count > settings.max_loop_retries
-
+        # Do NOT escalate — graceful degradation means we continue without RAG
         return {
             "retrieved_docs": [],
             "loop_count": loop_count,
-            "error_message": str(exc),
-            "should_escalate": should_escalate,
+            "error_message": "",
             "trace": state["trace"],
         }
 

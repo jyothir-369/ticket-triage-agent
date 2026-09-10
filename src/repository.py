@@ -39,17 +39,36 @@ class TicketRepository:
     # ── Create ──────────────────────────────────────────────────────────────────
 
     async def create_ticket(self, ticket: Ticket) -> TicketModel:
-        """Persist a new :class:`Ticket` and return the ORM model."""
-        model = TicketModel(
-            id=str(ticket.id),
-            content=ticket.content,
-            source=ticket.source,
-            source_id=ticket.source_id,
-            metadata_=ticket.metadata.model_dump_json(),
-            status=ticket.status.value,
-            created_at=ticket.created_at,
-        )
+        """Persist a new :class:`Ticket` and return the ORM model.
+
+        **Idempotency**: if ``ticket.source_id`` is provided and a ticket
+        with that ``source_id`` already exists, returns the existing model
+        instead of creating a duplicate.
+        """
         async with get_session() as session:
+            # Idempotency check
+            if ticket.source_id:
+                existing = await session.execute(
+                    select(TicketModel).where(TicketModel.source_id == ticket.source_id)
+                )
+                existing_model = existing.scalar_one_or_none()
+                if existing_model is not None:
+                    logger.info(
+                        "Ticket already exists for source_id=%s: %s",
+                        ticket.source_id,
+                        existing_model.id,
+                    )
+                    return existing_model
+
+            model = TicketModel(
+                id=str(ticket.id),
+                content=ticket.content,
+                source=ticket.source,
+                source_id=ticket.source_id,
+                metadata_=ticket.metadata.model_dump_json(),
+                status=ticket.status.value,
+                created_at=ticket.created_at,
+            )
             session.add(model)
             await session.flush()  # populate defaults / generated columns
             await session.refresh(model)

@@ -1,7 +1,15 @@
-"""FastAPI entry point — exposes triage, trace, and metrics endpoints."""
+"""FastAPI entry point — exposes triage, trace, and metrics endpoints.
+
+Includes graceful shutdown handling:
+- SIGTERM/SIGINT → stop accepting new tasks, wait for in-flight tasks (30s max)
+- Close database connections, Qdrant client, Redis client
+- Log shutdown progress
+"""
 
 from __future__ import annotations
 
+import asyncio
+import signal
 import time
 from contextlib import asynccontextmanager
 
@@ -19,7 +27,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.agent.graph import AgentExecutor
+from src.agent.graph import AgentExecutor, shutdown as graceful_shutdown, is_shutting_down
 from src.config import get_settings
 from src.models.database import Base, get_db_session, get_engine
 from src.models.schemas import (
@@ -42,18 +50,57 @@ settings = get_settings()
 
 
 # ---------------------------------------------------------------------------
-# Lifespan — create tables on startup / dispose on shutdown
+# Lifespan — create tables on startup / graceful shutdown
 # ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # ── Startup ──────────────────────────────────────────────────────────────
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("api.startup", db=settings.database_url.split("@")[-1])
+
+    # Set up signal handlers for graceful shutdown
+    loop = asyncio.get_running_loop()
+
+    def _handle_signal(sig_name: str) -> None:
+        logger.info("api.signal_received", signal=sig_name)
+        # Schedule graceful shutdown
+        loop.create_task(_shutdown_handler(sig_name))
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, lambda s=sig: _handle_signal(s.name))
+        except NotImplementedError:
+            # Windows doesn't support add_signal_handler for all signals
+            pass
+
     yield
-    await engine.dispose()
-    logger.info("api.shutdown")
+
+    # ── Shutdown ─────────────────────────────────────────────────────────────
+    await _shutdown_handler("lifespan_exit")
+
+
+async def _shutdown_handler(signal_name: str = "unknown") -> None:
+    """Handle graceful shutdown: stop tasks, close connections."""
+    if is_shutting_down():
+        return  # Already shutting down
+
+    logger.info("api.shutdown.initiated", signal=signal_name)
+
+    # Graceful shutdown of agent tasks (waits up to 30s)
+    await graceful_shutdown(timeout_seconds=30.0)
+
+    # Close database engine
+    try:
+        engine = get_engine()
+        await engine.dispose()
+        logger.info("api.shutdown.database_disposed")
+    except Exception as exc:
+        logger.warning("api.shutdown.database_close_failed", error=str(exc))
+
+    logger.info("api.shutdown.complete", signal=signal_name)
 
 
 app = FastAPI(
@@ -349,3 +396,32 @@ async def circuit_breaker_stats():
     from src.utils.circuit_breaker import get_circuit_breaker_stats
 
     return get_circuit_breaker_stats()
+
+
+@app.get(
+    "/metrics/resources",
+    summary="Resource usage and limits",
+    description="Returns concurrency, timeout, and resource limit metrics.",
+)
+async def resource_metrics():
+    """Return resource usage and limit metrics."""
+    from src.agent.graph import (
+        _triage_semaphore,
+        _inflight_tasks,
+        is_shutting_down,
+    )
+
+    return {
+        "concurrency": {
+            "max_concurrent": 5,
+            "available_slots": _triage_semaphore._value,
+            "inflight_tasks": len(_inflight_tasks),
+        },
+        "timeouts": {
+            "triage_timeout_seconds": settings.triage_timeout_seconds,
+            "tool_timeout_seconds": 10,
+        },
+        "shutdown": {
+            "is_shutting_down": is_shutting_down(),
+        },
+    }

@@ -46,26 +46,39 @@ T = TypeVar("T")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Custom Exceptions
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class RateLimitError(Exception):
+    """Raised when an API rate limit is hit (HTTP 429)."""
+
+    def __init__(self, message: str = "Rate limit exceeded", retry_after: float | None = None):
+        self.retry_after = retry_after
+        super().__init__(message)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Custom Wait Strategies
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 def wait_exponential_with_jitter(
-    multiplier: float = 1.0,
-    min_delay: float = 0.5,
-    max_delay: float = 60.0,
-    jitter_range: float = 0.5,
+    multiplier: float = 2.0,
+    min_delay: float = 1.0,
+    max_delay: float = 10.0,
+    jitter_range: float = 0.3,
 ) -> Callable[[RetryCallState], float]:
     """Create a wait strategy with exponential backoff and random jitter.
 
     Parameters
     ----------
     multiplier:
-        Multiplier for the exponential backoff.
+        Multiplier for the exponential backoff (default 2.0).
     min_delay:
-        Minimum delay between retries in seconds.
+        Minimum delay between retries in seconds (default 1.0).
     max_delay:
-        Maximum delay between retries in seconds.
+        Maximum delay between retries in seconds (default 10.0).
     jitter_range:
         Range of random jitter as a fraction of the delay (0.0 to 1.0).
 
@@ -331,25 +344,26 @@ def retry_on_result(
 
 def retry_llm_call(
     max_attempts: int = 3,
-    base_delay: float = 1.0,
+    base_delay: float = 2.0,
 ) -> Callable:
     """Convenience decorator for retrying LLM API calls.
 
-    Uses circuit breaker integration and handles common LLM errors.
+    Uses circuit breaker integration and handles common LLM errors:
+    ConnectionError, TimeoutError, RateLimitError.
     """
     return retry_on_exception(
         max_attempts=max_attempts,
         base_delay=base_delay,
-        max_delay=30.0,
+        max_delay=10.0,
         jitter_range=0.3,
-        exceptions=(ConnectionError, TimeoutError, OSError),
+        exceptions=(ConnectionError, TimeoutError, OSError, RateLimitError),
         circuit_breaker_name="llm_service",
     )
 
 
 def retry_database_call(
     max_attempts: int = 3,
-    base_delay: float = 0.5,
+    base_delay: float = 2.0,
 ) -> Callable:
     """Convenience decorator for retrying database calls."""
     return retry_on_exception(
@@ -364,15 +378,15 @@ def retry_database_call(
 
 def retry_http_call(
     max_attempts: int = 3,
-    base_delay: float = 1.0,
+    base_delay: float = 2.0,
 ) -> Callable:
     """Convenience decorator for retrying HTTP calls."""
     return retry_on_exception(
         max_attempts=max_attempts,
         base_delay=base_delay,
-        max_delay=30.0,
+        max_delay=10.0,
         jitter_range=0.3,
-        exceptions=(ConnectionError, TimeoutError, OSError),
+        exceptions=(ConnectionError, TimeoutError, OSError, RateLimitError),
         circuit_breaker_name="http_client",
     )
 

@@ -13,6 +13,7 @@ Provides a class-based retriever wrapping a Qdrant vector store with:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import time
@@ -37,77 +38,22 @@ from qdrant_client.models import (
 )
 
 from src.config import get_settings
+from utils.circuit_breaker import CircuitBreakerOpen, get_circuit_breaker
 
 logger = structlog.get_logger(__name__)
 settings = get_settings()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Circuit Breaker (reuses the pattern from embedding.py)
+# Circuit Breaker — shared from utils/circuit_breaker.py
+# 5 failures in 60s → OPEN for 30s
 # ═══════════════════════════════════════════════════════════════════════════════
 
-
-class CircuitBreakerOpenError(Exception):
-    """Raised when the circuit breaker is in OPEN state."""
-
-
-@dataclass
-class CircuitBreaker:
-    """Circuit breaker for Qdrant operations.
-
-    Tracks failures within a rolling time window.  Opens the circuit
-    after *failure_threshold* failures within *failure_window_seconds*,
-    then resets after *recovery_timeout_seconds*.
-    """
-
-    failure_threshold: int = 5
-    failure_window_seconds: float = 60.0
-    recovery_timeout_seconds: float = 30.0
-
-    _failures: deque[float] = field(default_factory=deque, repr=False)
-    _state: Literal["closed", "open", "half_open"] = field(
-        default="closed", repr=False
-    )
-    _opened_at: float = field(default=0.0, repr=False)
-
-    @property
-    def state(self) -> str:
-        if self._state == "open":
-            if time.monotonic() - self._opened_at >= self.recovery_timeout_seconds:
-                self._state = "half_open"
-                logger.info("circuit_breaker.half_open")
-        return self._state
-
-    def record_success(self) -> None:
-        if self._state == "half_open":
-            self._state = "closed"
-            self._failures.clear()
-            logger.info("circuit_breaker.closed_after_recovery")
-        elif self._state == "closed":
-            self._failures.clear()
-
-    def record_failure(self) -> None:
-        now = time.monotonic()
-        self._failures.append(now)
-        cutoff = now - self.failure_window_seconds
-        while self._failures and self._failures[0] < cutoff:
-            self._failures.popleft()
-
-        if self._state == "half_open":
-            self._state = "open"
-            self._opened_at = now
-            logger.warning("circuit_breaker.reopened", failures=len(self._failures))
-        elif len(self._failures) >= self.failure_threshold:
-            self._state = "open"
-            self._opened_at = now
-            logger.warning(
-                "circuit_breaker.opened",
-                failures=len(self._failures),
-                threshold=self.failure_threshold,
-            )
-
-    def allow_request(self) -> bool:
-        return self.state != "open"
+_qdrant_breaker = get_circuit_breaker(
+    name="qdrant_service",
+    failure_threshold=5,
+    timeout=30.0,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -233,9 +179,7 @@ class TicketRetriever:
         self._timeout = timeout or settings.qdrant_timeout
 
         self._client: QdrantClient | None = None
-        self._circuit_breaker = CircuitBreaker(
-            failure_threshold=5, failure_window_seconds=60.0
-        )
+        self._circuit_breaker = _qdrant_breaker
         self._cache: QueryCache | None = (
             QueryCache(
                 redis_url=settings.redis_url,
@@ -325,18 +269,26 @@ class TicketRetriever:
     # ── Retry-wrapped helpers ───────────────────────────────────────────────
 
     def _retry_operation(self, operation: str, fn, *args, **kwargs):
-        """Execute *fn* with up to 3 retry attempts and exponential back-off."""
+        """Execute *fn* with up to 3 retry attempts and exponential back-off.
+
+        Uses multiplier=2, min=1s, max=10s with jitter.
+        """
         from tenacity import (
             retry,
             retry_if_exception_type,
             stop_after_attempt,
-            wait_exponential,
         )
+        from utils.retry import wait_exponential_with_jitter
 
         retrier = retry(
-            retry=retry_if_exception_type((ConnectionError, TimeoutError, Exception)),
+            retry=retry_if_exception_type((ConnectionError, TimeoutError, OSError)),
             stop=stop_after_attempt(3),
-            wait=wait_exponential(multiplier=1, min=1, max=10),
+            wait=wait_exponential_with_jitter(
+                multiplier=2.0,
+                min_delay=1.0,
+                max_delay=10.0,
+                jitter_range=0.3,
+            ),
             reraise=True,
         )
         return retrier(fn)(*args, **kwargs)
@@ -353,16 +305,22 @@ class TicketRetriever:
         """Search Qdrant for documents similar to *query*.
 
         Steps:
-        1. Generate query embedding via the configured embedding provider.
-        2. Search Qdrant with ``score_threshold=min_score`` and optional payload filters.
-        3. Convert Qdrant points to ``RetrievedDocument`` objects.
-        4. Apply ``min_score`` post-filter and sort descending by score.
+        1. Check circuit breaker — return empty list if open.
+        2. Check Redis query cache.
+        3. Generate query embedding and search Qdrant.
+        4. Convert Qdrant points to ``RetrievedDocument`` objects.
+        5. Apply ``min_score`` post-filter and sort descending by score.
 
         Returns an empty list when the circuit breaker is open or on errors.
+        Logs degradation events for monitoring.
         """
         # Check circuit breaker
-        if not self._circuit_breaker.allow_request():
-            logger.warning("retrieval.circuit_open")
+        if self._circuit_breaker.state.value != "closed":
+            logger.warning(
+                "retrieval.degraded.circuit_breaker_open",
+                state=self._circuit_breaker.state.value,
+                failure_count=self._circuit_breaker._failure_count,
+            )
             return []
 
         # Check query cache
@@ -372,7 +330,10 @@ class TicketRetriever:
                 return [RetrievedDocument(**d) for d in cached]
 
         try:
-            results = await self._do_search(query, limit, filters, min_score)
+            results = await asyncio.wait_for(
+                self._do_search(query, limit, filters, min_score),
+                timeout=10.0,
+            )
             self._circuit_breaker.record_success()
 
             # Populate cache
@@ -383,11 +344,27 @@ class TicketRetriever:
                 )
 
             return results
-        except CircuitBreakerOpenError:
-            raise
+        except CircuitBreakerOpen:
+            logger.warning(
+                "retrieval.degraded.circuit_breaker_rejected",
+                query_len=len(query),
+            )
+            return []
+        except asyncio.TimeoutError:
+            self._circuit_breaker.record_failure()
+            logger.warning(
+                "retrieval.degraded.timeout",
+                query_len=len(query),
+                timeout_seconds=10.0,
+            )
+            return []
         except Exception as exc:
             self._circuit_breaker.record_failure()
-            logger.error("retrieval.search_failed", error=str(exc))
+            logger.error(
+                "retrieval.degraded.search_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
             return []
 
     async def _do_search(
@@ -471,9 +448,14 @@ class TicketRetriever:
         using the configured embedding provider.
 
         Returns True on success, False on failure.
+        Logs degradation when circuit breaker is open.
         """
-        if not self._circuit_breaker.allow_request():
-            logger.warning("retrieval.circuit_open_skip_index")
+        if self._circuit_breaker.state.value != "closed":
+            logger.warning(
+                "retrieval.degraded.circuit_open_skip_index",
+                doc_id=doc_id,
+                state=self._circuit_breaker.state.value,
+            )
             return False
 
         try:
@@ -504,6 +486,9 @@ class TicketRetriever:
             self._circuit_breaker.record_success()
             logger.debug("retrieval.document_indexed", doc_id=doc_id)
             return True
+        except CircuitBreakerOpen:
+            logger.warning("retrieval.degraded.circuit_open_index", doc_id=doc_id)
+            return False
         except Exception as exc:
             self._circuit_breaker.record_failure()
             logger.error("retrieval.index_failed", doc_id=doc_id, error=str(exc))
