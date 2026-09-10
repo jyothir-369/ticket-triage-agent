@@ -7,7 +7,7 @@ correctness analysis.
 Usage::
 
     # Run from the command line
-    python -m eval.harness
+    python -m src.eval.harness
 
     # Or use programmatically
     harness = EvalHarness()
@@ -27,7 +27,7 @@ from typing import Any
 
 import structlog
 
-from eval.metrics import (
+from src.eval.metrics import (
     AggregateMetrics,
     MetricResult,
     aggregate_metrics,

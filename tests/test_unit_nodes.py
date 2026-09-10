@@ -146,7 +146,7 @@ class TestTemplateFallbackDraft:
 class TestClassifyNode:
     @pytest.mark.asyncio
     async def test_classify_node_success(self, sample_agent_state):
-        from src.agent.graph import classify_node
+        from src.agent.nodes import classify_node
 
         mock_classification = TicketClassification(
             category=TicketCategory.BUG,
@@ -154,7 +154,7 @@ class TestClassifyNode:
             confidence=0.92,
             reasoning="Bug detected.",
         )
-        with patch("src.agent.graph.get_classifier") as mock_get:
+        with patch("src.services.classification.get_classifier") as mock_get:
             mock_classifier = MagicMock()
             mock_classifier.classify = AsyncMock(return_value=mock_classification)
             mock_get.return_value = mock_classifier
@@ -167,17 +167,18 @@ class TestClassifyNode:
 
     @pytest.mark.asyncio
     async def test_classify_node_failure_increments_loop(self, sample_agent_state):
-        from src.agent.graph import classify_node
+        from src.agent.nodes import classify_node
 
-        with patch("src.agent.graph.get_classifier") as mock_get:
+        with patch("src.services.classification.get_classifier") as mock_get:
             mock_classifier = MagicMock()
             mock_classifier.classify = AsyncMock(side_effect=RuntimeError("LLM down"))
             mock_get.return_value = mock_classifier
 
-            # The node itself catches the exception and re-raises
-            # but the wrapped version handles it
-            with pytest.raises(RuntimeError):
-                await classify_node(sample_agent_state)
+            # nodes.py catches exceptions and returns state with should_escalate
+            result = await classify_node(sample_agent_state)
+            assert "loop_count" in result
+            assert result["loop_count"] > 0
+            assert "error_message" in result
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -188,7 +189,7 @@ class TestClassifyNode:
 class TestRetrieveNode:
     @pytest.mark.asyncio
     async def test_retrieve_node_success(self, sample_agent_state):
-        from src.agent.graph import retrieve_node
+        from src.agent.nodes import retrieve_node
 
         mock_docs = [
             MagicMock(
@@ -199,7 +200,7 @@ class TestRetrieveNode:
                 source="past_ticket",
             )
         ]
-        with patch("src.agent.graph.get_retriever") as mock_get:
+        with patch("src.services.retrieval.get_retriever") as mock_get:
             mock_retriever = MagicMock()
             mock_retriever.search = AsyncMock(return_value=mock_docs)
             mock_get.return_value = mock_retriever
@@ -212,9 +213,9 @@ class TestRetrieveNode:
 
     @pytest.mark.asyncio
     async def test_retrieve_node_empty_results(self, sample_agent_state):
-        from src.agent.graph import retrieve_node
+        from src.agent.nodes import retrieve_node
 
-        with patch("src.agent.graph.get_retriever") as mock_get:
+        with patch("src.services.retrieval.get_retriever") as mock_get:
             mock_retriever = MagicMock()
             mock_retriever.search = AsyncMock(return_value=[])
             mock_get.return_value = mock_retriever
@@ -231,7 +232,7 @@ class TestRetrieveNode:
 class TestDraftNode:
     @pytest.mark.asyncio
     async def test_draft_node_success(self, sample_agent_state):
-        from src.agent.graph import draft_node
+        from src.agent.nodes import draft_node
 
         mock_draft = DraftResponse(
             draft_text="We are investigating your login issue.",
@@ -239,7 +240,7 @@ class TestDraftNode:
             confidence=0.85,
             reasoning="Standard bug response.",
         )
-        with patch("src.agent.graph.get_draft_generator") as mock_get:
+        with patch("src.services.drafting.get_draft_generator") as mock_get:
             mock_gen = MagicMock()
             mock_gen.generate = AsyncMock(return_value=mock_draft)
             mock_get.return_value = mock_gen
@@ -251,9 +252,9 @@ class TestDraftNode:
 
     @pytest.mark.asyncio
     async def test_draft_node_fallback_on_failure(self, sample_agent_state):
-        from src.agent.graph import draft_node
+        from src.agent.nodes import draft_node
 
-        with patch("src.agent.graph.get_draft_generator") as mock_get:
+        with patch("src.services.drafting.get_draft_generator") as mock_get:
             mock_gen = MagicMock()
             mock_gen.generate = AsyncMock(side_effect=RuntimeError("LLM timeout"))
             mock_get.return_value = mock_gen
@@ -273,7 +274,7 @@ class TestDraftNode:
 class TestEscalateCheckNode:
     @pytest.mark.asyncio
     async def test_no_escalation_high_confidence(self, sample_agent_state):
-        from src.agent.graph import escalate_check_node
+        from src.agent.nodes import escalate_check_node
 
         result = await escalate_check_node(sample_agent_state)
 
@@ -283,7 +284,7 @@ class TestEscalateCheckNode:
 
     @pytest.mark.asyncio
     async def test_escalation_low_confidence(self, sample_agent_state):
-        from src.agent.graph import escalate_check_node
+        from src.agent.nodes import escalate_check_node
 
         # Override with low confidence
         sample_agent_state["classification"] = TicketClassification(
@@ -305,7 +306,7 @@ class TestEscalateCheckNode:
 
     @pytest.mark.asyncio
     async def test_escalation_missing_classification(self):
-        from src.agent.graph import escalate_check_node
+        from src.agent.nodes import escalate_check_node
 
         state: AgentState = {
             "ticket": Ticket(id=1, content="test"),
@@ -329,7 +330,7 @@ class TestEscalateCheckNode:
 
     @pytest.mark.asyncio
     async def test_escalation_loop_count_exceeded(self, sample_agent_state):
-        from src.agent.graph import escalate_check_node
+        from src.agent.nodes import escalate_check_node
 
         sample_agent_state["loop_count"] = 10  # Exceeds max_loop_retries (3)
 
@@ -347,9 +348,9 @@ class TestEscalateCheckNode:
 class TestEscalateNode:
     @pytest.mark.asyncio
     async def test_escalate_node_persists(self, sample_agent_state_escalated):
-        from src.agent.graph import escalate_node
+        from src.agent.nodes import escalate_node
 
-        with patch("src.agent.graph.TicketRepository") as MockRepo:
+        with patch("src.repository.TicketRepository") as MockRepo:
             mock_repo = MagicMock()
             mock_repo.update_ticket_status = AsyncMock()
             mock_repo.update_ticket = AsyncMock()
@@ -369,9 +370,9 @@ class TestEscalateNode:
 class TestFinalizeNode:
     @pytest.mark.asyncio
     async def test_finalize_node_resolved(self, sample_agent_state):
-        from src.agent.graph import finalize_node
+        from src.agent.nodes import finalize_node
 
-        with patch("src.agent.graph.TicketRepository") as MockRepo:
+        with patch("src.repository.TicketRepository") as MockRepo:
             mock_repo = MagicMock()
             mock_repo.save_triage_result = AsyncMock()
             mock_repo.update_ticket = AsyncMock()
@@ -385,9 +386,9 @@ class TestFinalizeNode:
 
     @pytest.mark.asyncio
     async def test_finalize_node_escalated(self, sample_agent_state_escalated):
-        from src.agent.graph import finalize_node
+        from src.agent.nodes import finalize_node
 
-        with patch("src.agent.graph.TicketRepository") as MockRepo:
+        with patch("src.repository.TicketRepository") as MockRepo:
             mock_repo = MagicMock()
             mock_repo.save_triage_result = AsyncMock()
             mock_repo.update_ticket = AsyncMock()

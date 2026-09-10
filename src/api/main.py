@@ -56,6 +56,8 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup ──────────────────────────────────────────────────────────────
+    # NOTE: In production, run `alembic upgrade head` before starting the app.
+    # The create_all below is a dev convenience fallback for SQLite / local dev.
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -232,7 +234,7 @@ async def health_check():
     from datetime import datetime, timezone
 
     from src.config import get_settings
-    from src.utils.circuit_breaker import get_all_circuit_breaker_stats
+    from src.utils.circuit_breaker import get_circuit_breaker_stats
 
     settings = get_settings()
     checks: dict[str, HealthCheckResult] = {}
@@ -413,13 +415,13 @@ async def resource_metrics():
 
     return {
         "concurrency": {
-            "max_concurrent": 5,
+            "max_concurrent": settings.max_concurrent_triages,
             "available_slots": _triage_semaphore._value,
             "inflight_tasks": len(_inflight_tasks),
         },
         "timeouts": {
             "triage_timeout_seconds": settings.triage_timeout_seconds,
-            "tool_timeout_seconds": 10,
+            "tool_timeout_seconds": settings.classification_timeout_seconds,
         },
         "shutdown": {
             "is_shutting_down": is_shutting_down(),

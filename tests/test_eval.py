@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from eval.harness import EvalHarness
-from eval.metrics import (
+from src.eval.harness import EvalHarness
+from src.eval.metrics import (
     AggregateMetrics,
     MetricResult,
     aggregate_metrics,

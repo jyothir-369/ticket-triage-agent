@@ -29,6 +29,18 @@ class Settings(BaseSettings):
         default="postgresql+asyncpg://triage_user:triage_pass@localhost:5432/triage_db",
         description="SQLAlchemy async connection string for PostgreSQL.",
     )
+    database_pool_size: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="Number of connections to keep in the async connection pool.",
+    )
+    database_max_overflow: int = Field(
+        default=10,
+        ge=0,
+        le=50,
+        description="Max extra connections beyond pool_size for burst traffic.",
+    )
 
     # ── Qdrant (Vector DB) ─────────────────────────────────────────────────────
 
@@ -143,6 +155,30 @@ class Settings(BaseSettings):
         le=300,
         description="p95 latency budget for a single triage run (seconds).",
     )
+    max_concurrent_triages: int = Field(
+        default=5,
+        ge=1,
+        le=50,
+        description="Maximum number of triage runs executing concurrently.",
+    )
+    classification_timeout_seconds: float = Field(
+        default=10.0,
+        ge=1.0,
+        le=60.0,
+        description="Timeout in seconds for a single LLM classification call.",
+    )
+    drafting_timeout_seconds: float = Field(
+        default=15.0,
+        ge=1.0,
+        le=120.0,
+        description="Timeout in seconds for a single LLM draft generation call.",
+    )
+    retrieval_timeout_seconds: float = Field(
+        default=10.0,
+        ge=1.0,
+        le=60.0,
+        description="Timeout in seconds for vector retrieval operations.",
+    )
 
     # ── Observability (OpenTelemetry) ──────────────────────────────────────────
 
@@ -160,6 +196,17 @@ class Settings(BaseSettings):
     eval_tickets_path: str = Field(
         default="./data/eval_tickets.json",
         description="Path to the labeled eval ticket fixture (JSON).",
+    )
+
+    # ── Dashboard Authentication ────────────────────────────────────────────────
+
+    dashboard_username: str = Field(
+        default="admin",
+        description="Username for Streamlit dashboard login (v1 placeholder auth).",
+    )
+    dashboard_password: str = Field(
+        default="admin",
+        description="Password for Streamlit dashboard login (v1 placeholder auth).",
     )
 
     # ── Validators ──────────────────────────────────────────────────────────────

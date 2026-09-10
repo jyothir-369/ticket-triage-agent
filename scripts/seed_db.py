@@ -269,7 +269,7 @@ async def insert_sample_tickets(force: bool = False) -> int:
                 source_id=t["source_id"],
                 category=t["expected_category"],
                 urgency=t["expected_urgency"],
-                status=TicketStatus.OPEN.value,
+                status=DBTicketStatus.OPEN.value,
             )
             session.add(ticket)
             inserted += 1

@@ -9,8 +9,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.services.retrieval import (
-    CircuitBreaker,
-    CircuitBreakerOpenError,
     QueryCache,
     RetrievedDoc,
     TicketRetriever,
@@ -18,6 +16,7 @@ from src.services.retrieval import (
     search_similar_tickets,
     search_tickets,
 )
+from src.utils.circuit_breaker import CircuitBreaker
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

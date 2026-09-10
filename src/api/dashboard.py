@@ -11,14 +11,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from src.config import get_settings
 from src.models.database import get_db_session
 from src.models.schemas import DashboardMetrics, RecentActivity
 from src.models.ticket import TicketModel, TicketStatus as DBTicketStatus
 from src.models.trace import TraceModel
 
 logger = structlog.get_logger(__name__)
-settings = get_settings()
 
 router = APIRouter(tags=["dashboard"])
 
@@ -26,15 +24,6 @@ router = APIRouter(tags=["dashboard"])
 # ---------------------------------------------------------------------------
 # Response models
 # ---------------------------------------------------------------------------
-
-
-class HealthResponse(BaseModel):
-    """Health check response."""
-
-    status: str
-    db: str
-    qdrant: str
-    redis: str
 
 
 class ActivityResponse(BaseModel):
@@ -232,68 +221,3 @@ async def get_categories(
     return CategoryDistribution(categories=distribution)
 
 
-# ---------------------------------------------------------------------------
-# GET /health — Health check
-# ---------------------------------------------------------------------------
-
-
-@router.get(
-    "/health",
-    response_model=HealthResponse,
-    summary="Health check",
-    description="Verifies connectivity to DB, Qdrant, and Redis.",
-)
-async def health_check():
-    db_status = "ok"
-    qdrant_status = "ok"
-    redis_status = "ok"
-
-    # Check DB connectivity
-    try:
-        from src.models.database import get_engine
-        from sqlalchemy import text
-
-        engine = get_engine()
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
-    except Exception as exc:
-        logger.error("health.db_failed", error=str(exc))
-        db_status = f"error: {type(exc).__name__}"
-
-    # Check Qdrant connectivity
-    try:
-        import httpx
-
-        async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.get(
-                f"http://{settings.qdrant_host}:{settings.qdrant_port}/healthz"
-            )
-            if resp.status_code != 200:
-                qdrant_status = f"error: status {resp.status_code}"
-    except ImportError:
-        qdrant_status = "error: httpx not installed"
-    except Exception as exc:
-        logger.error("health.qdrant_failed", error=str(exc))
-        qdrant_status = f"error: {type(exc).__name__}"
-
-    # Check Redis connectivity
-    try:
-        import aioredis
-
-        redis = aioredis.from_url(settings.redis_url, socket_timeout=5)
-        await redis.ping()
-        await redis.close()
-    except ImportError:
-        redis_status = "error: aioredis not installed"
-    except Exception as exc:
-        logger.error("health.redis_failed", error=str(exc))
-        redis_status = f"error: {type(exc).__name__}"
-
-    overall = "ok" if all(s == "ok" for s in [db_status, qdrant_status, redis_status]) else "degraded"
-
-    return HealthResponse(
-        status=overall,
-        db=db_status,
-        qdrant=qdrant_status,
-        redis=redis_status,
-    )

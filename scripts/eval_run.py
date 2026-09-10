@@ -27,8 +27,8 @@ if _PROJECT_ROOT not in sys.path:
 
 import structlog
 
-from eval.harness import EvalHarness
-from eval.metrics import AggregateMetrics
+from src.eval.harness import EvalHarness
+from src.eval.metrics import AggregateMetrics
 
 logger = structlog.get_logger(__name__)
 

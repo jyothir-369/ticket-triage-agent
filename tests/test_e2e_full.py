@@ -664,7 +664,7 @@ class TestEvaluationFramework:
 
     def test_eval_harness_importable(self):
         """EvalHarness should be importable."""
-        from eval.harness import EvalHarness
+        from src.eval.harness import EvalHarness
 
         harness = EvalHarness()
         assert harness is not None
@@ -672,7 +672,7 @@ class TestEvaluationFramework:
 
     def test_eval_metrics_importable(self):
         """Evaluation metrics should be importable."""
-        from eval.metrics import (
+        from src.eval.metrics import (
             AggregateMetrics,
             MetricResult,
             aggregate_metrics,
@@ -691,7 +691,7 @@ class TestEvaluationFramework:
 
     def test_eval_fixture_loadable(self):
         """Eval fixture should be loadable."""
-        from eval.harness import EvalHarness
+        from src.eval.harness import EvalHarness
 
         harness = EvalHarness()
         tickets = harness.load_tickets()
@@ -701,7 +701,7 @@ class TestEvaluationFramework:
 
     def test_eval_fixture_has_expected_fields(self):
         """Each eval ticket should have all required fields for comparison."""
-        from eval.harness import EvalHarness
+        from src.eval.harness import EvalHarness
 
         harness = EvalHarness()
         tickets = harness.load_tickets()
@@ -718,8 +718,8 @@ class TestEvaluationFramework:
     @pytest.mark.asyncio
     async def test_eval_compare_results_works(self):
         """EvalHarness.compare_results should produce valid MetricResult."""
-        from eval.harness import EvalHarness
-        from eval.metrics import MetricResult
+        from src.eval.harness import EvalHarness
+        from src.eval.metrics import MetricResult
 
         harness = EvalHarness()
 

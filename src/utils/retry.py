@@ -8,7 +8,7 @@ Provides:
 
 Usage::
 
-    from utils.retry import retry_on_exception, retry_on_result
+    from src.utils.retry import retry_on_exception, retry_on_result
 
     @retry_on_exception(max_attempts=3, base_delay=1.0)
     async def call_llm(prompt: str) -> str:
@@ -180,7 +180,7 @@ def retry_on_exception(
             # Get circuit breaker if configured
             cb = None
             if circuit_breaker_name:
-                from utils.circuit_breaker import get_circuit_breaker
+                from src.utils.circuit_breaker import get_circuit_breaker
                 cb = get_circuit_breaker(circuit_breaker_name)
 
             # Define retry condition
@@ -214,7 +214,7 @@ def retry_on_exception(
             # Get circuit breaker if configured
             cb = None
             if circuit_breaker_name:
-                from utils.circuit_breaker import get_circuit_breaker
+                from src.utils.circuit_breaker import get_circuit_breaker
                 cb = get_circuit_breaker(circuit_breaker_name)
 
             # Define retry condition

@@ -43,13 +43,13 @@ dependencies = [
     "sentence-transformers>=3.0.0",
 
     # Background jobs
-    "inngest>=0.4.0",
     "redis>=5.0.0",
 
     # Observability
     "opentelemetry-api>=1.27.0",
     "opentelemetry-sdk>=1.27.0",
     "opentelemetry-exporter-otlp>=1.27.0",
+    "opentelemetry-instrumentation-fastapi>=0.48b0",
 
     # Utilities
     "pydantic>=2.9.0",

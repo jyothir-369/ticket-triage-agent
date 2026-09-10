@@ -7,7 +7,7 @@ Implements the classic circuit breaker pattern with three states:
 
 Usage::
 
-    from utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
+    from src.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpen
 
     breaker = CircuitBreaker(
         name="llm_service",

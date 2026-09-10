@@ -38,7 +38,7 @@ from qdrant_client.models import (
 )
 
 from src.config import get_settings
-from utils.circuit_breaker import CircuitBreakerOpen, get_circuit_breaker
+from src.utils.circuit_breaker import CircuitBreakerOpen, get_circuit_breaker
 
 logger = structlog.get_logger(__name__)
 settings = get_settings()
@@ -278,7 +278,7 @@ class TicketRetriever:
             retry_if_exception_type,
             stop_after_attempt,
         )
-        from utils.retry import wait_exponential_with_jitter
+        from src.utils.retry import wait_exponential_with_jitter
 
         retrier = retry(
             retry=retry_if_exception_type((ConnectionError, TimeoutError, OSError)),

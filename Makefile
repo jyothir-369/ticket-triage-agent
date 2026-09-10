@@ -2,8 +2,8 @@
 # Support-Ticket Triage Agent — Makefile
 # =============================================================================
 
-.PHONY: install dev db-up db-down db-migrate db-seed test lint format run \
-        run-dashboard docker-up docker-down help
+.PHONY: install dev db-up db-down migrate seed test lint format run \
+        run-dashboard docker-up docker-down help eval
 
 PYTHON := python
 PIP := pip
@@ -37,23 +37,23 @@ db-up: ## Start PostgreSQL, Qdrant, Redis via Docker
 db-down: ## Stop all database services
 	docker compose down
 
-db-migrate: ## Run Alembic migrations
+migrate: ## Run Alembic migrations (alembic upgrade head)
 	alembic upgrade head
 
-db-seed: ## Seed the database with eval tickets
-	$(PYTHON) -m src.scripts.seed_db
+seed: ## Seed the database with sample tickets and eval fixtures
+	$(PYTHON) -m scripts.seed_db
 
 # ── Quality ─────────────────────────────────────────────────────────────────────
 test: ## Run the full test suite with coverage
 	$(PYTEST) --cov=src --cov-report=term-missing --cov-report=html -v
 
 lint: ## Run linters (ruff + mypy)
-	$(RUFF) check src/ tests/
-	$(MYPY) src/
+	$(RUFF) check src/ tests/ scripts/
+	$(MYPY) src/ --ignore-missing-imports
 
 format: ## Auto-format code
-	$(BLACK) src/ tests/
-	$(RUFF) check --fix src/ tests/
+	$(BLACK) src/ tests/ scripts/
+	$(RUFF) check --fix src/ tests/ scripts/
 
 # ── Run ─────────────────────────────────────────────────────────────────────────
 run: ## Start the FastAPI server (dev mode)
@@ -72,4 +72,4 @@ docker-down: ## Stop and remove all containers
 
 # ── Evaluation ──────────────────────────────────────────────────────────────────
 eval: ## Run the evaluation harness
-	$(PYTHON) -m src.evaluation.run_eval
+	$(PYTHON) -m scripts.eval_run

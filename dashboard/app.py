@@ -1,6 +1,12 @@
-"""Streamlit dashboard — triage metrics, ticket queue, and trace viewer."""
+"""Streamlit dashboard — triage metrics, ticket queue, and trace viewer.
+
+Includes a v1 placeholder login page. In production, replace with real auth.
+"""
+
+from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import httpx
@@ -14,13 +20,59 @@ st.set_page_config(
     layout="wide",
 )
 
-API_BASE = "http://localhost:8000"
+API_BASE = os.environ.get("API_URL", "http://localhost:8000")
+DEFAULT_USERNAME = os.environ.get("DASHBOARD_USERNAME", "admin")
+DEFAULT_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "admin")
+
+
+# ── Authentication ──────────────────────────────────────────────────────────────
+
+
+def check_login() -> bool:
+    """Check if the user is authenticated via session state."""
+    return st.session_state.get("authenticated", False)
+
+
+def login_form() -> None:
+    """Render the login form and handle authentication."""
+    st.title("🔐 Login")
+    st.markdown("Enter your credentials to access the Triage Agent Dashboard.")
+
+    with st.form("login_form"):
+        username = st.text_input("Username", placeholder="Enter username")
+        password = st.text_input("Password", type="password", placeholder="Enter password")
+        submitted = st.form_submit_button("Login")
+
+        if submitted:
+            if username == DEFAULT_USERNAME and password == DEFAULT_PASSWORD:
+                st.session_state["authenticated"] = True
+                st.session_state["username"] = username
+                st.rerun()
+            else:
+                st.error("Invalid username or password.")
+
+
+def logout() -> None:
+    """Clear authentication state and rerun."""
+    st.session_state["authenticated"] = False
+    st.session_state.pop("username", None)
+    st.rerun()
+
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
-st.sidebar.title("🎫 Triage Agent")
-page = st.sidebar.radio("Navigate", ["📊 Metrics", "📋 Ticket Queue", "🔍 Trace Viewer"])
+
+if check_login():
+    st.sidebar.title("🎫 Triage Agent")
+    st.sidebar.caption(f"Logged in as **{st.session_state.get('username', 'user')}**")
+    if st.sidebar.button("🚪 Logout"):
+        logout()
+    page = st.sidebar.radio("Navigate", ["📊 Metrics", "📋 Ticket Queue", "🔍 Trace Viewer"])
+else:
+    page = None
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 def api_get(endpoint: str) -> dict | None:
     try:
@@ -43,6 +95,7 @@ def api_post(endpoint: str, json_data: dict | None = None) -> dict | None:
 
 
 # ── Metrics Page ───────────────────────────────────────────────────────────────
+
 
 def render_metrics():
     st.title("📊 Triage Metrics")
@@ -121,6 +174,7 @@ def render_metrics():
 
 # ── Ticket Queue Page ──────────────────────────────────────────────────────────
 
+
 def render_queue():
     st.title("📋 Ticket Queue")
 
@@ -183,6 +237,7 @@ def render_queue():
 
 # ── Trace Viewer Page ──────────────────────────────────────────────────────────
 
+
 def render_trace():
     st.title("🔍 Trace Viewer")
 
@@ -230,7 +285,9 @@ def render_trace():
 
 # ── Render ─────────────────────────────────────────────────────────────────────
 
-if page == "📊 Metrics":
+if not check_login():
+    login_form()
+elif page == "📊 Metrics":
     render_metrics()
 elif page == "📋 Ticket Queue":
     render_queue()

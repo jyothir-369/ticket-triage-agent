@@ -31,8 +31,8 @@ from src.models.schemas import (
     TicketClassification,
     UrgencyLevel,
 )
-from utils.circuit_breaker import CircuitBreakerOpen, get_circuit_breaker
-from utils.retry import RateLimitError
+from src.utils.circuit_breaker import CircuitBreakerOpen, get_circuit_breaker
+from src.utils.retry import RateLimitError
 
 logger = structlog.get_logger(__name__)
 

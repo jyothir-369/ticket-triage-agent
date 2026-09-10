@@ -517,6 +517,11 @@ class TriageTrace(BaseModel):
         ge=0,
         description="Number of external tool/LLM calls made.",
     )
+    loop_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of agent loop iterations executed.",
+    )
     loop_detected: bool = Field(
         default=False,
         description="True if the agent loop was broken by the retry guard.",

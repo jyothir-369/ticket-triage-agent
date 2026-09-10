@@ -51,6 +51,66 @@ services:
       timeout: 3s
       retries: 5
 
+  # ── Database Migration (one-shot) ────────────────────────────────────────────
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: triage-migrate
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://triage_user:triage_pass@postgres:5432/triage_db
+    command: alembic upgrade head
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── FastAPI Application ──────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: triage-app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://triage_user:triage_pass@postgres:5432/triage_db
+      QDRANT_HOST: qdrant
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  # ── Streamlit Dashboard ──────────────────────────────────────────────────────
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: triage-dashboard
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      API_URL: http://app:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      app:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   qdrant_data:
