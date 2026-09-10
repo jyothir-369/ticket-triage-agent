@@ -10,6 +10,12 @@ from src.services.embedding import (
     SentenceTransformerProvider,
     get_embedding_provider,
 )
+from src.services.retrieval import (
+    QueryCache,
+    TicketRetriever,
+    get_retriever,
+    search_tickets,
+)
 
 __all__ = [
     "CachedEmbeddingProvider",
@@ -20,4 +26,8 @@ __all__ = [
     "OpenAIEmbeddingProvider",
     "SentenceTransformerProvider",
     "get_embedding_provider",
+    "QueryCache",
+    "TicketRetriever",
+    "get_retriever",
+    "search_tickets",
 ]

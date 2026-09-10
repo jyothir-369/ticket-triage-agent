@@ -10,7 +10,12 @@ from langchain_core.tools import tool
 from src.config import get_settings
 from src.services.classification import Classification, classify_ticket
 from src.services.drafting import draft_response
-from src.services.retrieval import RetrievedDoc, search_similar_tickets
+from src.services.retrieval import (
+    RetrievedDoc,
+    search_similar_tickets,
+    search_tickets,
+    get_retriever,
+)
 
 logger = structlog.get_logger(__name__)
 settings = get_settings()
@@ -131,4 +136,4 @@ def draft(subject: str, body: str, retrieved_docs_json: str) -> dict:
 
 
 # Exported list of tools for the agent
-AGENT_TOOLS = [classify, retrieve, draft]
+AGENT_TOOLS = [classify, retrieve, draft, search_tickets]

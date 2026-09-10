@@ -40,11 +40,29 @@ class Settings(BaseSettings):
         default=6333,
         ge=1,
         le=65535,
-        description="gRPC/HTTP port for Qdrant.",
+        description="HTTP REST port for Qdrant.",
+    )
+    qdrant_grpc_port: int = Field(
+        default=6334,
+        ge=1,
+        le=65535,
+        description="gRPC port for Qdrant (used for high-throughput operations).",
+    )
+    qdrant_timeout: int = Field(
+        default=60,
+        ge=5,
+        le=300,
+        description="Timeout in seconds for Qdrant operations.",
     )
     qdrant_collection: str = Field(
         default="tickets",
         description="Qdrant collection name used for ticket vector storage.",
+    )
+    embedding_vector_size: int = Field(
+        default=1536,
+        ge=64,
+        le=4096,
+        description="Dimensionality of embedding vectors stored in Qdrant.",
     )
 
     # ── LLM Provider ────────────────────────────────────────────────────────────
@@ -75,6 +93,11 @@ class Settings(BaseSettings):
     redis_url: str = Field(
         default="redis://localhost:6379/0",
         description="Redis connection URL for Inngest and caching.",
+    )
+    retriever_cache_ttl_seconds: int = Field(
+        default=300,
+        ge=0,
+        description="TTL in seconds for cached retriever query results (default: 5 minutes).",
     )
 
     # ── Embedding Provider ─────────────────────────────────────────────────────
