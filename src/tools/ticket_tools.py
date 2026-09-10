@@ -8,7 +8,7 @@ import structlog
 from langchain_core.tools import tool
 
 from src.config import get_settings
-from src.services.classification import Classification, classify_ticket
+from src.services.classification import TicketClassifier, get_classifier
 from src.services.drafting import draft_response
 from src.services.retrieval import (
     RetrievedDoc,
@@ -61,15 +61,15 @@ def classify(subject: str, body: str) -> dict:
     """
     import asyncio
 
-    result: Classification = asyncio.get_event_loop().run_until_complete(
-        classify_ticket(subject, body)
+    classifier = get_classifier()
+    ticket_content = f"Subject: {subject}\n\nBody:\n{body}"
+    result = asyncio.get_event_loop().run_until_complete(
+        classifier.classify(ticket_content)
     )
-    # v1 confidence heuristic — the LLM doesn't emit a score, so we derive one
-    confidence = 1.0 if result.category.value != "unknown" else 0.4
     output = ClassifyOutput(
         category=result.category.value,
         urgency=result.urgency.value,
-        confidence=confidence,
+        confidence=result.confidence,
     )
     logger.info("tool.classify", **vars(output))
     return {"category": output.category, "urgency": output.urgency, "confidence": output.confidence}

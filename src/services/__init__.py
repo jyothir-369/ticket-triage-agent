@@ -1,5 +1,9 @@
 """Services layer — LLM adapters, retrieval, classification, embeddings."""
 
+from src.services.classification import (
+    TicketClassifier,
+    get_classifier,
+)
 from src.services.embedding import (
     CachedEmbeddingProvider,
     CircuitBreaker,
@@ -25,6 +29,8 @@ __all__ = [
     "EmbeddingProvider",
     "OpenAIEmbeddingProvider",
     "SentenceTransformerProvider",
+    "TicketClassifier",
+    "get_classifier",
     "get_embedding_provider",
     "QueryCache",
     "TicketRetriever",

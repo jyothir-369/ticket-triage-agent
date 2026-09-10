@@ -61,15 +61,16 @@ class TriageState(TypedDict):
 
 async def classify_node(state: TriageState) -> dict:
     """Classify the ticket into category + urgency."""
-    from src.services.classification import classify_ticket
+    from src.services.classification import get_classifier
 
-    result = await classify_ticket(state["subject"], state["body"])
-    confidence = 1.0 if result.category.value != "unknown" else 0.4
+    classifier = get_classifier()
+    ticket_content = f"Subject: {state['subject']}\n\nBody:\n{state['body']}"
+    result = await classifier.classify(ticket_content)
     logger.info("agent.classify", category=result.category.value, urgency=result.urgency.value)
     return {
         "category": result.category.value,
         "urgency": result.urgency.value,
-        "confidence": confidence,
+        "confidence": result.confidence,
     }
 
 
