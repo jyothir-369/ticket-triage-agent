@@ -336,6 +336,7 @@ async def retrieve_node(state: "AgentState") -> dict:
     """
     from src.agent.nodes import _append_step, _now_ms, _ticket_id
     from src.agent.state import AgentState  # noqa: F811
+    from src.models.schemas import StepStatus
 
     ticket_id = _ticket_id(state)
     log = logger.bind(ticket_id=ticket_id, node="retrieve")
@@ -348,7 +349,6 @@ async def retrieve_node(state: "AgentState") -> dict:
         ticket = state["ticket"]
         classification = state.get("classification")
 
-        from src.models.schemas import StepStatus
         from src.services.retrieval import get_retriever
 
         retriever = get_retriever()
@@ -426,6 +426,8 @@ async def draft_node(state: "AgentState") -> dict:
         _ticket_id,
     )
     from src.agent.state import AgentState  # noqa: F811
+    from src.models.schemas import RetrievedDocument, StepStatus, TicketCategory
+    from src.models.schemas import UrgencyLevel
 
     ticket_id = _ticket_id(state)
     log = logger.bind(ticket_id=ticket_id, node="draft")
@@ -439,8 +441,6 @@ async def draft_node(state: "AgentState") -> dict:
         classification = state.get("classification")
         raw_docs = state.get("retrieved_docs", [])
 
-        from src.models.schemas import RetrievedDocument, StepStatus, TicketCategory
-        from src.models.schemas import UrgencyLevel
         from src.services.drafting import get_draft_generator
 
         # Convert serialised dicts back to schema objects
@@ -538,6 +538,7 @@ async def escalate_check_node(state: "AgentState") -> dict:
     """
     from src.agent.nodes import _append_step, _ensure_trace, _now_ms, _ticket_id
     from src.agent.state import AgentState  # noqa: F811
+    from src.models.schemas import StepStatus
 
     ticket_id = _ticket_id(state)
     log = logger.bind(ticket_id=ticket_id, node="escalate_check")
@@ -690,6 +691,7 @@ async def escalate_node(state: "AgentState") -> dict:
     """
     from src.agent.nodes import _append_step, _ensure_trace, _now_ms, _ticket_id
     from src.agent.state import AgentState  # noqa: F811
+    from src.models.schemas import StepStatus
 
     ticket_id = _ticket_id(state)
     log = logger.bind(ticket_id=ticket_id, node="escalate")
@@ -792,6 +794,7 @@ async def finalize_node(state: "AgentState") -> dict:
     """
     from src.agent.nodes import _append_step, _ensure_trace, _now_ms, _ticket_id
     from src.agent.state import AgentState  # noqa: F811
+    from src.models.schemas import StepStatus
 
     ticket_id = _ticket_id(state)
     log = logger.bind(ticket_id=ticket_id, node="finalize")
@@ -1192,7 +1195,7 @@ class AgentExecutor:
         self._graph = graph or triage_agent
         logger.debug("agent_executor.initialised")
 
-    async def run(self, ticket: "Ticket") -> "AgentState":
+    async def run(self, ticket: "Ticket", config: dict | None = None) -> "AgentState":
         """Execute the triage graph for a single ticket and return the final state.
 
         **Concurrency**: acquires a semaphore slot (max 5 concurrent triage runs).
@@ -1203,6 +1206,8 @@ class AgentExecutor:
         ----------
         ticket:
             The incoming support ticket to triage.
+        config:
+            Optional configuration dict for the graph (e.g., thread_id for checkpointer).
 
         Returns
         -------
@@ -1253,8 +1258,10 @@ class AgentExecutor:
             start = time.monotonic()
 
             try:
+                # Build invoke config with thread_id if provided
+                invoke_config = config or {"configurable": {"thread_id": ticket_id_str}}
                 final_state = await asyncio.wait_for(
-                    self._graph.ainvoke(initial_state),
+                    self._graph.ainvoke(initial_state, config=invoke_config),
                     timeout=settings.triage_timeout_seconds,
                 )
             except asyncio.TimeoutError:
