@@ -6,16 +6,25 @@ import time
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+try:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    _HAS_OTEL = True
+except ImportError:
+    _HAS_OTEL = False
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.agent.graph import run_triage
+from src.agent.graph import AgentExecutor
 from src.config import get_settings
 from src.models.database import Base, get_db_session, get_engine
 from src.models.schemas import (
     DashboardMetrics,
+    Ticket,
     TicketCategory,
     TicketStatus,
     UrgencyLevel,
@@ -33,7 +42,7 @@ settings = get_settings()
 
 
 # ---------------------------------------------------------------------------
-# Lifespan — create tables on startup
+# Lifespan — create tables on startup / dispose on shutdown
 # ---------------------------------------------------------------------------
 
 @asynccontextmanager
@@ -44,191 +53,99 @@ async def lifespan(app: FastAPI):
     logger.info("api.startup", db=settings.database_url.split("@")[-1])
     yield
     await engine.dispose()
+    logger.info("api.shutdown")
 
 
 app = FastAPI(
     title="Support-Ticket Triage Agent",
+    description=(
+        "Automated triage pipeline for support tickets — "
+        "classifies, retrieves context, drafts responses, and "
+        "routes low-confidence cases to human reviewers."
+    ),
     version="0.1.0",
     lifespan=lifespan,
 )
 
 
 # ---------------------------------------------------------------------------
-# Health
+# CORS middleware
 # ---------------------------------------------------------------------------
 
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ---------------------------------------------------------------------------
-# POST /tickets/{ticket_id}/triage
+# Request logging middleware
 # ---------------------------------------------------------------------------
 
-class TriageResponse(BaseModel):
-    ticket_id: int
-    category: str
-    urgency: str
-    confidence: float
-    drafted_response: str
-    decision: str
-    escalation_reason: str
-    latency_ms: int
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.monotonic()
+    response = await call_next(request)
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+    logger.info(
+        "api.request",
+        method=request.method,
+        path=request.url.path,
+        status=response.status_code,
+        duration_ms=elapsed_ms,
+    )
+    return response
 
 
-@app.post("/tickets/{ticket_id}/triage", response_model=TriageResponse)
-async def triage_ticket(
-    ticket_id: int,
-    db: AsyncSession = Depends(get_db_session),
-):
-    """Run the full triage pipeline on a ticket."""
-    # Fetch ticket from DB
-    result = await db.execute(select(TicketModel).where(TicketModel.id == str(ticket_id)))
-    ticket = result.scalar_one_or_none()
+# ---------------------------------------------------------------------------
+# OpenTelemetry instrumentation (optional)
+# ---------------------------------------------------------------------------
 
-    if ticket is None:
-        raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
+if _HAS_OTEL:
+    FastAPIInstrumentor.instrument_app(app)
 
-    # Run the agent
-    outcome = await run_triage(
-        ticket_id=ticket.id,
-        subject=ticket.content[:100],
-        body=ticket.content,
+
+# ---------------------------------------------------------------------------
+# Global exception handlers
+# ---------------------------------------------------------------------------
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    logger.warning(
+        "api.http_error",
+        status=exc.status_code,
+        detail=exc.detail,
+        path=request.url.path,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
     )
 
-    # Update ticket in DB
-    ticket.category = outcome["category"]
-    ticket.urgency = outcome["urgency"]
-    ticket.confidence = outcome["confidence"]
-    ticket.draft_text = outcome["drafted_response"]
 
-    if outcome["decision"] == "escalate":
-        ticket.status = DBTicketStatus.ESCALATED.value
-    else:
-        ticket.status = DBTicketStatus.RESOLVED.value
-
-    # Persist trace step
-    trace = TraceModel(
-        ticket_id=ticket.id,
-        step="triage",
-        status=outcome["decision"],
-        duration_ms=outcome["latency_ms"],
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    logger.error(
+        "api.unhandled_error",
+        error=str(exc),
+        error_type=type(exc).__name__,
+        path=request.url.path,
     )
-    db.add(trace)
-    await db.flush()
-
-    return TriageResponse(**outcome)
-
-
-# ---------------------------------------------------------------------------
-# GET /tickets/{ticket_id}/trace
-# ---------------------------------------------------------------------------
-
-class TraceStepOut(BaseModel):
-    step: str
-    status: str
-    duration_ms: int | None
-    error: str | None
-
-
-class TraceOut(BaseModel):
-    ticket_id: str
-    steps: list[TraceStepOut]
-
-
-@app.get("/tickets/{ticket_id}/trace", response_model=TraceOut)
-async def get_trace(
-    ticket_id: int,
-    db: AsyncSession = Depends(get_db_session),
-):
-    """Retrieve the step-by-step decision trace for a ticket."""
-    result = await db.execute(
-        select(TraceModel)
-        .where(TraceModel.ticket_id == str(ticket_id))
-        .order_by(TraceModel.timestamp)
-    )
-    steps = result.scalars().all()
-
-    if not steps:
-        raise HTTPException(status_code=404, detail=f"No trace for ticket {ticket_id}")
-
-    return TraceOut(
-        ticket_id=str(ticket_id),
-        steps=[
-            TraceStepOut(
-                step=s.step,
-                status=s.status,
-                duration_ms=s.duration_ms,
-                error=s.error,
-            )
-            for s in steps
-        ],
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
     )
 
 
 # ---------------------------------------------------------------------------
-# GET /dashboard/triage-metrics
+# Include route modules
 # ---------------------------------------------------------------------------
 
-@app.get("/dashboard/triage-metrics", response_model=DashboardMetrics)
-async def triage_metrics(
-    db: AsyncSession = Depends(get_db_session),
-):
-    """Aggregate triage metrics for the dashboard."""
-    # Counts
-    total = (await db.execute(select(func.count(TicketModel.id)))).scalar() or 0
-    resolved = (
-        await db.execute(
-            select(func.count(TicketModel.id)).where(
-                TicketModel.status == DBTicketStatus.RESOLVED.value
-            )
-        )
-    ).scalar() or 0
-    escalated = (
-        await db.execute(
-            select(func.count(TicketModel.id)).where(
-                TicketModel.status == DBTicketStatus.ESCALATED.value
-            )
-        )
-    ).scalar() or 0
+from src.api.tickets import router as tickets_router  # noqa: E402
+from src.api.dashboard import router as dashboard_router  # noqa: E402
 
-    # Averages
-    avg_conf = (
-        await db.execute(
-            select(func.avg(TicketModel.confidence)).where(TicketModel.confidence.isnot(None))
-        )
-    ).scalar()
-
-    # Breakdowns
-    cat_rows = (
-        await db.execute(
-            select(TicketModel.category, func.count(TicketModel.id))
-            .where(TicketModel.category.isnot(None))
-            .group_by(TicketModel.category)
-        )
-    ).all()
-    urg_rows = (
-        await db.execute(
-            select(TicketModel.urgency, func.count(TicketModel.id))
-            .where(TicketModel.urgency.isnot(None))
-            .group_by(TicketModel.urgency)
-        )
-    ).all()
-
-    category_breakdown = {row[0]: row[1] for row in cat_rows}
-    urgency_breakdown = {row[0]: row[1] for row in urg_rows}
-
-    escalation_rate = escalated / total if total > 0 else 0.0
-    success_rate = resolved / total if total > 0 else 0.0
-
-    return DashboardMetrics(
-        total_tickets=total,
-        processed_tickets=resolved + escalated,
-        escalated_tickets=escalated,
-        escalation_rate=round(escalation_rate, 4),
-        avg_confidence=round(avg_conf, 4) if avg_conf else 0.0,
-        success_rate=round(success_rate, 4),
-        category_distribution=category_breakdown,
-        urgency_distribution=urgency_breakdown,
-    )
+app.include_router(tickets_router)
+app.include_router(dashboard_router)
