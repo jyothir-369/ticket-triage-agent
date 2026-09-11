@@ -77,6 +77,8 @@ dev = [
     "ruff>=0.8.0",
     "mypy>=1.13.0",
     "pre-commit>=4.0.0",
+    # Fixture rebuild: python -m eval.build_fixture (not needed for --check)
+    "datasets>=2.20.0",
 ]
 
 [tool.black]
@@ -97,6 +99,13 @@ select = [
     "C4",  # flake8-comprehensions
     "UP",  # pyupgrade
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Long lines here are *content*, not code: hand-labelled draft text (becomes the
+# checked-in fixture JSONL) and the self-contained HTML dashboard template. An
+# inline `# noqa` would corrupt the string contents, so ignore E501 per-file.
+"eval/build_fixture.py" = ["E501"]
+"eval/report.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"

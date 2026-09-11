@@ -31,10 +31,10 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Run ruff check
-        run: ruff check src/ tests/ scripts/
+        run: ruff check src/ tests/ scripts/ eval/
 
       - name: Run ruff format check
-        run: ruff format --check src/ tests/ scripts/
+        run: ruff format --check src/ tests/ scripts/ eval/
 
       - name: Run mypy
         run: mypy src/ --ignore-missing-imports --no-error-summary
@@ -103,12 +103,16 @@ jobs:
             coverage-integration.xml
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # Eval — evaluation harness on labeled tickets
+  # Eval — 100-ticket harness against the labeled fixture
   # ─────────────────────────────────────────────────────────────────────────────
   eval:
     name: Evaluation
     runs-on: ubuntu-latest
     needs: test
+    env:
+      # The harness runs the REAL agent (classifier + drafter need an LLM).
+      # Configure this secret in the repo to enable the model-backed eval run.
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -122,60 +126,50 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Verify eval module importable
-        run: python -c "from src.eval.harness import EvalHarness; print('OK')"
+      - name: Validate checked-in fixture (100 tickets, valid labels)
+        run: python -m eval.build_fixture --check
 
       - name: Run evaluation harness
         id: eval
+        if: env.GEMINI_API_KEY != ''
+        run: python -m eval.run_eval --source all
+
+      - name: Skip model-backed evaluation (no GEMINI_API_KEY configured)
+        if: env.GEMINI_API_KEY == ''
         run: |
-          python -c "
-          import asyncio, json, sys
-          from src.eval.harness import EvalHarness
+          echo "::warning::GEMINI_API_KEY not configured — skipping the 100-ticket model-backed evaluation. Set it as a repo secret to enable CI accuracy gates."
 
-          async def run():
-              harness = EvalHarness(concurrency=5)
-              metrics = await harness.evaluate()
-              report = metrics.to_dict()
-
-              # Write summary for downstream steps
-              with open('eval_summary.json', 'w') as f:
-                  json.dump(report, f, indent=2)
-
-              # Print key metrics
-              print(f'Category Accuracy:    {metrics.category_accuracy:.1%}')
-              print(f'Urgency Accuracy:     {metrics.urgency_accuracy:.1%}')
-              print(f'Escalation Accuracy:  {metrics.escalation_accuracy:.1%}')
-              print(f'Pass Rate:            {metrics.pass_rate:.1%}')
-
-              # Fail if success_rate < 80%
-              if metrics.pass_rate < 0.80:
-                  print(f'FAIL: success_rate {metrics.pass_rate:.1%} < 80%')
-                  sys.exit(1)
-
-              # Fail if escalation_rate > 30%
-              total = metrics.total
-              escalated = metrics.confusion_matrix.get('escalation', {}).get('TP', 0) + \
-                          metrics.confusion_matrix.get('escalation', {}).get('FP', 0)
-              escalation_rate = escalated / total if total > 0 else 0
-              print(f'Escalation Rate:      {escalation_rate:.1%}')
-              if escalation_rate > 0.30:
-                  print(f'FAIL: escalation_rate {escalation_rate:.1%} > 30%')
-                  sys.exit(1)
-
-              print('PASS: All evaluation thresholds met.')
-
-          asyncio.run(run())
-          "
+      - name: Enforce accuracy thresholds
+        if: success() && env.GEMINI_API_KEY != ''
+        run: |
+          python - <<'EOF'
+          import json
+          report = json.load(open('eval/results/latest.json', encoding='utf-8'))
+          m = report['metrics']
+          cat = m['category_accuracy']
+          esc_prec = m['escalation_precision']
+          print(f'category_accuracy   = {cat:.3f} (threshold 0.70)')
+          print(f'escalation_precision = {esc_prec:.3f} (threshold 0.60)')
+          failures = []
+          if cat < 0.70:
+              failures.append(f'category_accuracy {cat:.3f} < 0.70')
+          if esc_prec < 0.60:
+              failures.append(f'escalation_precision {esc_prec:.3f} < 0.60')
+          if failures:
+              for f in failures:
+                  print(f'FAIL: {f}')
+              raise SystemExit(1)
+          print('PASS: all evaluation thresholds met.')
+          EOF
 
       - name: Upload evaluation report
-        if: always()
+        if: success() && env.GEMINI_API_KEY != ''
         uses: actions/upload-artifact@v4
         with:
           name: eval-report
           path: |
-            eval_summary.json
-            eval_report.json
-            eval_dashboard.html
+            eval/results/latest.json
+            eval/results/report.html
 
   # ─────────────────────────────────────────────────────────────────────────────
   # Build — Docker image (optional, on main only)

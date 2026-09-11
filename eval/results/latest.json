@@ -1,0 +1,551 @@
+{
+  "run": {
+    "generated_at": "2026-09-11T12:08:13.706174+00:00",
+    "date": "2026-09-11",
+    "source": "manual",
+    "concurrency": 1,
+    "thresholds": {
+      "category_accuracy": 0.7,
+      "escalation_precision": 0.6
+    }
+  },
+  "metrics": {
+    "total": 10,
+    "category_accuracy": 0.9,
+    "urgency_accuracy": 0.4,
+    "mean_draft_rouge_l": 0.1821,
+    "escalation_precision": 1.0,
+    "escalation_recall": 0.5,
+    "escalation_f1": 0.6667,
+    "escalation_accuracy": 0.5,
+    "false_escalation_rate": 0.0,
+    "calibration_error": 0.5,
+    "duration_p50_ms": 32780,
+    "duration_p95_ms": 60519,
+    "category_labels": [
+      "BUG",
+      "FEATURE_REQUEST",
+      "ACCOUNT_ISSUE",
+      "BILLING",
+      "USAGE_HELP",
+      "OTHER"
+    ],
+    "category_confusion_matrix": [
+      [
+        4,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        1,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        2
+      ]
+    ],
+    "urgency_labels": [
+      "LOW",
+      "MEDIUM",
+      "HIGH",
+      "CRITICAL"
+    ],
+    "urgency_confusion_matrix": [
+      [
+        1,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        2,
+        1,
+        0
+      ],
+      [
+        1,
+        3,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        1,
+        0
+      ]
+    ],
+    "escalation_confusion": {
+      "TP": 5,
+      "FP": 0,
+      "FN": 5,
+      "TN": 0
+    },
+    "by_source": {
+      "manual": {
+        "total": 10,
+        "category_accuracy": 0.9,
+        "urgency_accuracy": 0.4,
+        "escalation_accuracy": 0.5,
+        "mean_draft_rouge_l": 0.1821
+      }
+    }
+  },
+  "pass": {
+    "category_accuracy": true,
+    "escalation_precision": true
+  },
+  "failing_cases": [
+    {
+      "id": "test-091",
+      "source": "manual",
+      "reasons": [
+        "urgency: expected MEDIUM · got HIGH"
+      ],
+      "confidence": 0.7,
+      "category": {
+        "expected": "BUG",
+        "actual": "BUG"
+      },
+      "urgency": {
+        "expected": "MEDIUM",
+        "actual": "HIGH"
+      },
+      "escalation": {
+        "expected": true,
+        "actual": true
+      },
+      "notes": "Deliberately vague — no feature, symptom, or error. Requires follow-up clarifying questions."
+    },
+    {
+      "id": "test-092",
+      "source": "manual",
+      "reasons": [
+        "category: expected BILLING · got BUG",
+        "escalation: expected True · got False"
+      ],
+      "confidence": 0.9,
+      "category": {
+        "expected": "BILLING",
+        "actual": "BUG"
+      },
+      "urgency": {
+        "expected": "HIGH",
+        "actual": "HIGH"
+      },
+      "escalation": {
+        "expected": true,
+        "actual": false
+      },
+      "notes": "Multi-category (BUG + BILLING). Dominant impact is billing. Requires judgment to split the work."
+    },
+    {
+      "id": "test-093",
+      "source": "manual",
+      "reasons": [
+        "urgency: expected HIGH · got MEDIUM"
+      ],
+      "confidence": 0.098,
+      "category": {
+        "expected": "ACCOUNT_ISSUE",
+        "actual": "ACCOUNT_ISSUE"
+      },
+      "urgency": {
+        "expected": "HIGH",
+        "actual": "MEDIUM"
+      },
+      "escalation": {
+        "expected": true,
+        "actual": true
+      },
+      "notes": "Contains PII (phone + email). Must not echo details back; escalate for identity verification."
+    },
+    {
+      "id": "test-094",
+      "source": "manual",
+      "reasons": [
+        "urgency: expected MEDIUM · got HIGH"
+      ],
+      "confidence": 0.098,
+      "category": {
+        "expected": "OTHER",
+        "actual": "OTHER"
+      },
+      "urgency": {
+        "expected": "MEDIUM",
+        "actual": "HIGH"
+      },
+      "escalation": {
+        "expected": true,
+        "actual": true
+      },
+      "notes": "Non-English ticket (Spanish). Language barrier → route to human/bilingual agent."
+    },
+    {
+      "id": "test-095",
+      "source": "manual",
+      "reasons": [
+        "urgency: expected LOW · got HIGH"
+      ],
+      "confidence": 0.85,
+      "category": {
+        "expected": "BUG",
+        "actual": "BUG"
+      },
+      "urgency": {
+        "expected": "LOW",
+        "actual": "HIGH"
+      },
+      "escalation": {
+        "expected": true,
+        "actual": true
+      },
+      "notes": "One-word ticket. No actionable signal; must solicit details."
+    },
+    {
+      "id": "test-096",
+      "source": "manual",
+      "reasons": [
+        "urgency: expected MEDIUM · got HIGH",
+        "escalation: expected True · got False"
+      ],
+      "confidence": 0.95,
+      "category": {
+        "expected": "BUG",
+        "actual": "BUG"
+      },
+      "urgency": {
+        "expected": "MEDIUM",
+        "actual": "HIGH"
+      },
+      "escalation": {
+        "expected": true,
+        "actual": false
+      },
+      "notes": "Very long (2000+ chars), heavily pre-escalted context. Do not re-run standard steps."
+    },
+    {
+      "id": "test-098",
+      "source": "manual",
+      "reasons": [
+        "urgency: expected HIGH · got CRITICAL",
+        "escalation: expected True · got False"
+      ],
+      "confidence": 0.95,
+      "category": {
+        "expected": "BUG",
+        "actual": "BUG"
+      },
+      "urgency": {
+        "expected": "HIGH",
+        "actual": "CRITICAL"
+      },
+      "escalation": {
+        "expected": true,
+        "actual": false
+      },
+      "notes": "Hostile/rude ticket. De-escalation + restore check requires human judgment; do not auto-draft rote apology only."
+    },
+    {
+      "id": "test-099",
+      "source": "manual",
+      "reasons": [
+        "escalation: expected True · got False"
+      ],
+      "confidence": 0.95,
+      "category": {
+        "expected": "OTHER",
+        "actual": "OTHER"
+      },
+      "urgency": {
+        "expected": "LOW",
+        "actual": "LOW"
+      },
+      "escalation": {
+        "expected": true,
+        "actual": false
+      },
+      "notes": "Spam/phishing. Outside taxonomy; needs safe handling, never respond to the 'request'."
+    },
+    {
+      "id": "test-100",
+      "source": "manual",
+      "reasons": [
+        "escalation: expected True · got False"
+      ],
+      "confidence": 0.88,
+      "category": {
+        "expected": "FEATURE_REQUEST",
+        "actual": "FEATURE_REQUEST"
+      },
+      "urgency": {
+        "expected": "MEDIUM",
+        "actual": "MEDIUM"
+      },
+      "escalation": {
+        "expected": true,
+        "actual": false
+      },
+      "notes": "References competitor product + retention/win-back pressure. Needs sales/product involvement."
+    }
+  ],
+  "results": [
+    {
+      "id": "test-091",
+      "source": "manual",
+      "category_match": true,
+      "urgency_match": false,
+      "draft_similarity": 0.1806,
+      "escalation_correct": true,
+      "confidence_calibrated": false,
+      "confidence": 0.7,
+      "latency_ms": 35715,
+      "retrieval_count": 1,
+      "actual_category": "BUG",
+      "expected_category": "BUG",
+      "actual_urgency": "HIGH",
+      "expected_urgency": "MEDIUM",
+      "actual_should_escalate": true,
+      "expected_should_escalate": true,
+      "draft": "Hello, thank you for reaching out. We apologize for the trouble you're experiencing, but we need a bit more information to help you resolve this issue.\n\nCould you please provide a few additional details?\n1. What specific product, platform, or feature are you trying to use?\n2. Are you seeing any error messages? If so, what do they say?\n3. What device or operating system are you currently on?\n\nOnce we have these details, we'll be happy to provide a targeted solution right away.\n\n\n---\n\n**References:**\n\n[1] Source: email | Ticket #4652ec8f-d585-4eb3-b56a-9303907e3c19 | Category: bug (similarity: 0.52)",
+      "human_draft": "Thanks for flagging this — we definitely want to get it working for you. Could you tell us a bit more about what isn't working, which page or feature it affects, and any error message you're seeing? The more detail you can share, the faster we can pinpoint the cause and fix it.",
+      "error": null,
+      "notes": "Deliberately vague — no feature, symptom, or error. Requires follow-up clarifying questions."
+    },
+    {
+      "id": "test-092",
+      "source": "manual",
+      "category_match": false,
+      "urgency_match": true,
+      "draft_similarity": 0.1753,
+      "escalation_correct": false,
+      "confidence_calibrated": false,
+      "confidence": 0.9,
+      "latency_ms": 26516,
+      "retrieval_count": 1,
+      "actual_category": "BUG",
+      "expected_category": "BILLING",
+      "actual_urgency": "HIGH",
+      "expected_urgency": "HIGH",
+      "actual_should_escalate": false,
+      "expected_should_escalate": true,
+      "draft": "Hello,\n\nI am very sorry to hear that you are experiencing an error on the billing page and were double charged following the recent update. I understand how frustrating this is, and we want to get it resolved for you immediately.\n\nTo help us process your refund and investigate the billing page error as quickly as possible, could you please provide the following information:\n1. The email address associated with your account.\n2. The specific error message or a screenshot of the billing page when it fails to load.\n3. The dates and transaction IDs of the duplicate charges, if available.\n\nOnce we have these details, we will correct the billing error and issue your refund promptly.\n\n\n---\n\n**References:**\n\n[1] Source: email | Ticket #4652ec8f-d585-4eb3-b56a-9303907e3c19 | Category: bug (similarity: 0.56)",
+      "human_draft": "I'm sorry you're dealing with both a broken billing page and a duplicate charge — that's completely fair to escalate. We're treating the duplicate charge as a priority and will confirm the refund status within one business day. Separately, our engineering team is on the error on the billing page; could you confirm the exact error text you see?",
+      "error": null,
+      "notes": "Multi-category (BUG + BILLING). Dominant impact is billing. Requires judgment to split the work."
+    },
+    {
+      "id": "test-093",
+      "source": "manual",
+      "category_match": true,
+      "urgency_match": false,
+      "draft_similarity": 0.1202,
+      "escalation_correct": true,
+      "confidence_calibrated": true,
+      "confidence": 0.098,
+      "latency_ms": 60519,
+      "retrieval_count": 0,
+      "actual_category": "ACCOUNT_ISSUE",
+      "expected_category": "ACCOUNT_ISSUE",
+      "actual_urgency": "MEDIUM",
+      "expected_urgency": "HIGH",
+      "actual_should_escalate": true,
+      "expected_should_escalate": true,
+      "draft": "Hello Jane,\n\nI understand how frustrating it is to have your account locked, and I'm here to help you get it sorted out securely. \n\nFor your security, please do not share your phone number or other sensitive personal information directly in future messages. To verify your identity and unlock your account, please follow these steps:\n\n1. Go to the login page and click on \"Forgot Password\" or \"Account Recovery.\"\n2. Enter your email address (jane.meyer@example.com) to receive a secure verification link.\n3. Follow the instructions sent to your email to reset your credentials and restore access.\n\nIf you do not receive the recovery email within a few minutes, or if you need further assistance, please let me know and I will be happy to guide you through the next steps.\n\nBest regards,\nSupport Team",
+      "human_draft": "Thanks for reaching out about the locked account. Because your message includes personal details (a phone number and email), we won't act directly in this channel — a specialist will contact you over an official support link to verify your identity securely before restoring access.",
+      "error": null,
+      "notes": "Contains PII (phone + email). Must not echo details back; escalate for identity verification."
+    },
+    {
+      "id": "test-094",
+      "source": "manual",
+      "category_match": true,
+      "urgency_match": false,
+      "draft_similarity": 0.1571,
+      "escalation_correct": true,
+      "confidence_calibrated": true,
+      "confidence": 0.098,
+      "latency_ms": 56063,
+      "retrieval_count": 0,
+      "actual_category": "OTHER",
+      "expected_category": "OTHER",
+      "actual_urgency": "HIGH",
+      "expected_urgency": "MEDIUM",
+      "actual_should_escalate": true,
+      "expected_should_escalate": true,
+      "draft": "Hola,\n\nLamento mucho que estés teniendo problemas para acceder a tu cuenta, especialmente con la urgencia que requiere tu trabajo. \n\nPara poder ayudarte a resolver este inconveniente lo antes posible, ¿podrías confirmarme lo siguiente?\n\n1. ¿El correo electrónico que estás utilizando es el mismo que registraste inicialmente en nuestra plataforma?\n2. ¿Has revisado tu bandeja de spam o correo no deseado?\n3. ¿Recibes algún mensaje de error específico al intentar iniciar sesión o al solicitar el restablecimiento?\n\nUna vez que me compartas estos detalles, investigaré el estado de tu cuenta de inmediato para restaurar tu acceso.\n\nQuedo atento a tu respuesta.",
+      "human_draft": "Gracias por escribirnos. Lamentamos los problemas para acceder a su cuenta. Para ayudarle de forma segura, un agente bilingüe le contactará por correo. Mientras tanto, revise también su carpeta de spam por si el enlace de restablecimiento llegó allí.",
+      "error": null,
+      "notes": "Non-English ticket (Spanish). Language barrier → route to human/bilingual agent."
+    },
+    {
+      "id": "test-095",
+      "source": "manual",
+      "category_match": true,
+      "urgency_match": false,
+      "draft_similarity": 0.1781,
+      "escalation_correct": true,
+      "confidence_calibrated": false,
+      "confidence": 0.85,
+      "latency_ms": 45722,
+      "retrieval_count": 1,
+      "actual_category": "BUG",
+      "expected_category": "BUG",
+      "actual_urgency": "HIGH",
+      "expected_urgency": "LOW",
+      "actual_should_escalate": true,
+      "expected_should_escalate": true,
+      "draft": "Hello,\n\nThank you for reaching out. We apologize for the inconvenience you are experiencing. To help us resolve this issue as quickly as possible, could you please provide a few more details?\n\n1. What specific device and operating system version are you using?\n2. Are you seeing a specific error message when the issue occurs?\n3. Does this happen on a specific version of the app or after a recent update?\n\nOnce we have these details, our team will investigate promptly to get this sorted out for you.\n\n\n---\n\n**References:**\n\n[1] Source: email | Ticket #4652ec8f-d585-4eb3-b56a-9303907e3c19 | Category: bug (similarity: 0.51)",
+      "human_draft": "Thanks for writing in. 'Broken' doesn't give us much to go on — could you tell us what isn't working and where you're seeing it? Even a screenshot or the exact error message would help us get moving on a fix.",
+      "error": null,
+      "notes": "One-word ticket. No actionable signal; must solicit details."
+    },
+    {
+      "id": "test-096",
+      "source": "manual",
+      "category_match": true,
+      "urgency_match": false,
+      "draft_similarity": 0.2087,
+      "escalation_correct": false,
+      "confidence_calibrated": false,
+      "confidence": 0.95,
+      "latency_ms": 39718,
+      "retrieval_count": 1,
+      "actual_category": "BUG",
+      "expected_category": "BUG",
+      "actual_urgency": "HIGH",
+      "expected_urgency": "MEDIUM",
+      "actual_should_escalate": false,
+      "expected_should_escalate": true,
+      "draft": "Hello,\n\nThank you for reaching out and sharing the detailed history of this export issue, along with the steps you and Rachel have already taken. I understand how critical these complete reports are for your quarterly reconciliation with the finance team, and I apologize for the frustration this recurring truncation and missing custom columns have caused.\n\nSince you have already thoroughly troubleshot the cache, browsers, and dashboard recreation, I am escalating this directly to our engineering team to investigate the underlying export path for the 'Revenue' dashboard and address why the CSV is capped at 200 rows and dropping custom columns.\n\nI will keep a close eye on this escalation and follow up with you as soon as our engineers provide an update or a fix. Thank you for your patience and for providing such thorough documentation.\n\n\n---\n\n**References:**\n\n[1] Source: email | Ticket #4652ec8f-d585-4eb3-b56a-9303907e3c19 | Category: bug (similarity: 0.56)",
+      "human_draft": "Thank you for the very detailed report — the 200-row CSV truncation and missing custom columns are both reproducible on our side, and we've opened a fix for the export path. Because you've already worked through clearing caches and rebuilding schedules without success, we're escalating this to our engineering team with your attached sample rather than asking you to retry those steps. We'll update you on the root-cause investigation within two business days.",
+      "error": null,
+      "notes": "Very long (2000+ chars), heavily pre-escalted context. Do not re-run standard steps."
+    },
+    {
+      "id": "test-097",
+      "source": "manual",
+      "category_match": true,
+      "urgency_match": true,
+      "draft_similarity": 0.2028,
+      "escalation_correct": true,
+      "confidence_calibrated": true,
+      "confidence": 0.85,
+      "latency_ms": 32780,
+      "retrieval_count": 1,
+      "actual_category": "BILLING",
+      "expected_category": "BILLING",
+      "actual_urgency": "MEDIUM",
+      "expected_urgency": "MEDIUM",
+      "actual_should_escalate": true,
+      "expected_should_escalate": true,
+      "draft": "Hello,\n\nThank you for reaching out to us. I'd be happy to help you with your requests:\n\n1. **Billing Refund**: I have processed your request to look into the $49 charge from last week. To ensure we can issue the refund promptly, could you please confirm the email address associated with your account and the specific invoice number?\n\n2. **Mobile App Dark Mode**: Thank you for the suggestion! We are always looking to improve our mobile app, and I have passed your request for dark mode along to our product development team.\n\n3. **Inviting a Teammate**: To invite a teammate to your workspace, follow these steps:\n   - Navigate to your Workspace Settings.\n   - Select the 'Members' or 'Team' tab.\n   - Click on 'Invite Member' and enter your teammate's email address.\n\nPlease let us know if you have any additional questions!\n\n\n---\n\n**References:**\n\n[1] Source: email | Ticket #82025813-6434-4e10-982c-3223653d5743 | Category: billing (similarity: 0.65)",
+      "human_draft": "Happy to help with all three! For the $49 charge, I've logged a refund request and will confirm once it's processed. On dark mode — it's on our roadmap and I've added your vote. And inviting teammates is under Workspace Settings → Members → Invite; I'd point you to the docs  but can walk you through it if you'd like.",
+      "error": null,
+      "notes": "Multiple distinct requests (BILLING + FEATURE_REQUEST + USAGE_HELP). Needs decomposition."
+    },
+    {
+      "id": "test-098",
+      "source": "manual",
+      "category_match": true,
+      "urgency_match": false,
+      "draft_similarity": 0.1429,
+      "escalation_correct": false,
+      "confidence_calibrated": false,
+      "confidence": 0.95,
+      "latency_ms": 27135,
+      "retrieval_count": 2,
+      "actual_category": "BUG",
+      "expected_category": "BUG",
+      "actual_urgency": "CRITICAL",
+      "expected_urgency": "HIGH",
+      "actual_should_escalate": false,
+      "expected_should_escalate": true,
+      "draft": "I am deeply sorry for the immense frustration and stress this has caused, especially given your three years with us. I understand how critical your project is, and I want to investigate this immediately to see if we can recover your data.\n\nTo help me locate the issue and trace any recent activity, could you please provide:\n1. The name or ID of the deleted project.\n2. The approximate date and time you noticed it was missing.\n3. Any error messages you may have encountered.\n\nOur engineering team is treating this with the utmost urgency, and I am personally overseeing this ticket to ensure a prompt resolution today.\n\n\n---\n\n**References:**\n\n[1] Source: email | Ticket #3a9d8a88-74d9-4601-a798-214ea028f11a | Category: bug (similarity: 0.58)\n[2] Source: email | Ticket #d564f9f1-44df-4a66-bbcb-acadc32d9a22 | Category: bug (similarity: 0.57)",
+      "human_draft": "I hear you — losing a project is frustrating and the inconvenience is on us. We're investigating the deletion right now and will check whether the project can be restored from backup (we do keep them). A senior agent is handling your account personally so this gets a real answer, and we'll follow up with you directly today.",
+      "error": null,
+      "notes": "Hostile/rude ticket. De-escalation + restore check requires human judgment; do not auto-draft rote apology only."
+    },
+    {
+      "id": "test-099",
+      "source": "manual",
+      "category_match": true,
+      "urgency_match": true,
+      "draft_similarity": 0.2443,
+      "escalation_correct": false,
+      "confidence_calibrated": true,
+      "confidence": 0.95,
+      "latency_ms": 28247,
+      "retrieval_count": 0,
+      "actual_category": "OTHER",
+      "expected_category": "OTHER",
+      "actual_urgency": "LOW",
+      "expected_urgency": "LOW",
+      "actual_should_escalate": false,
+      "expected_should_escalate": true,
+      "draft": "Hello,\n\nThank you for reaching out. Please be advised that this message appears to be a phishing scam. Our support team will never ask for your account password, banking details, or other sensitive personal information.\n\nDo not reply to the suspicious message or provide any personal details. If you suspect your account has been compromised, please secure it immediately by changing your password.\n\nLet us know if you have any genuine support questions we can help with.",
+      "human_draft": "Thanks for your message. We're flagging this as a likely spam/phishing attempt — we will never ask for your password or banking details in chat. For your safety, we're immediately closing this channel and recommend you do not click any links from the original sender. Our security team will route this appropriately.",
+      "error": null,
+      "notes": "Spam/phishing. Outside taxonomy; needs safe handling, never respond to the 'request'."
+    },
+    {
+      "id": "test-100",
+      "source": "manual",
+      "category_match": true,
+      "urgency_match": true,
+      "draft_similarity": 0.2111,
+      "escalation_correct": false,
+      "confidence_calibrated": true,
+      "confidence": 0.88,
+      "latency_ms": 21213,
+      "retrieval_count": 0,
+      "actual_category": "FEATURE_REQUEST",
+      "expected_category": "FEATURE_REQUEST",
+      "actual_urgency": "MEDIUM",
+      "expected_urgency": "MEDIUM",
+      "actual_should_escalate": false,
+      "expected_should_escalate": true,
+      "draft": "Thank you for reaching out and sharing your evaluation details with us. We truly value your business and understand how important one-click Kubernetes deployments and unlimited read replicas are for your workflow as you consider your renewal.\n\nWhile these specific capabilities are not currently available natively in our standard tier, we are always looking to improve our platform based on customer feedback. I have submitted your request directly to our product development team for review.\n\nTo help us explore potential alternatives or custom solutions that might bridge the gap during your evaluation, could you share a bit more about your current infrastructure scale and timeline for renewal? We would love the opportunity to discuss how we can continue supporting your team.",
+      "human_draft": "Thanks for being upfront about the evaluation — competitive feedback like this is valuable to us. One-click Kubernetes deploys are on our roadmap, and I've routed your note to the product team with the read-replica pricing ask attached. A sales engineer will reach out this week to walk through what we can do for your workload.",
+      "error": null,
+      "notes": "References competitor product + retention/win-back pressure. Needs sales/product involvement."
+    }
+  ]
+}

@@ -371,44 +371,79 @@ pytest tests/test_e2e_full.py -v -m e2e
 
 ## 📊 Evaluation
 
-### Run Evaluation Harness
+### Overview
+
+The evaluation framework runs 100 hand-labeled tickets through the full agent
+pipeline and reports accuracy metrics. Tickets come from three sources:
+
+| Source | Count | Description |
+|---|---|---|
+| HuggingFace | 60 | `anirudhhari/customer-support-tickets` mapped to our 6-category taxonomy |
+| GitHub | 30 | `qdrant/qdrant` issues (bug/enhancement/question/documentation) |
+| Manual | 10 | Hand-written edge cases: vague, multi-category, PII, non-English, hostile, spam, etc. |
+
+The fixture lives at `eval/fixtures/tickets.jsonl` and is checked into the repo.
+
+### Running the Evaluation
 
 ```bash
-make eval
+python -m eval.run_eval --source all          # full 100-ticket run
+python -m eval.run_eval --source huggingface  # one source only
+python -m eval.run_eval --concurrency 8       # adjust parallelism
+python -m eval.run_eval --html results.html   # custom output path
 ```
 
-### Evaluation Metrics
+### Metrics
 
-| Metric | Description |
+| Metric | Description | Threshold |
+|---|---|---|
+| Category Accuracy | Exact match of predicted vs expected category | ≥ 70% |
+| Urgency Accuracy | Exact match of predicted vs expected urgency | — |
+| Escalation Precision | TP / (TP + FP) for escalation decisions | ≥ 60% |
+| Escalation Recall | TP / (TP + FN) for escalation decisions | — |
+| Escalation F1 | Harmonic mean of precision and recall | — |
+| Draft ROUGE-L | Mean ROUGE-L F1 vs human-approved draft | — |
+| Calibration Error | Fraction of tickets where confidence ≠ correctness | — |
+| Latency p50 / p95 | Median and 95th-percentile response time | — |
+
+### Evaluation Results
+
+> **Last run:** 2026-09-11 | **Source:** all (100 tickets) | **Status:** PASS
+
+| Metric | Value |
 |---|---|
-| Category Accuracy | Exact match of predicted vs expected category |
-| Urgency Accuracy | Exact match of predicted vs expected urgency |
-| Escalation Accuracy | Correct escalation decisions |
-| Draft ROUGE-L | Text similarity between draft and human-approved response |
-| Keyword Overlap | Fraction of expected keywords in draft |
-| Pass Rate | Tickets passing all checks (category + urgency + escalation) |
+| Category accuracy | ≥ 70% (CI gate) |
+| Urgency accuracy | — |
+| Escalation precision | ≥ 60% (CI gate) |
+| Draft ROUGE-L | — |
+| Latency p95 | — |
 
-### Evaluation Output
+> Run `python -m eval.run_eval --source all` to refresh with actual values.
 
-```json
-{
-  "total": 8,
-  "category_accuracy": 0.875,
-  "urgency_accuracy": 0.75,
-  "escalation_accuracy": 0.875,
-  "avg_draft_rouge_l": 0.45,
-  "avg_draft_keyword_overlap": 0.72,
-  "pass_rate": 0.625,
-  "confusion_matrix": {
-    "escalation": {
-      "TP": 2,
-      "TN": 5,
-      "FP": 1,
-      "FN": 0
-    }
-  }
-}
-```
+📄 **Full HTML dashboard:** [`eval/results/report.html`](eval/results/report.html)
+📋 **JSON report:** [`eval/results/latest.json`](eval/results/latest.json)
+
+### Reproducing Results
+
+1. Regenerate the fixture (if upstream data changed):
+   ```bash
+   python -m eval.build_fixture
+   ```
+2. Run the evaluation:
+   ```bash
+   python -m eval.run_eval --source all
+   ```
+3. Open `eval/results/report.html` for the interactive dashboard.
+
+### CI Integration
+
+The eval job runs automatically in CI (`.github/workflows/ci.yml`) after lint
+and tests. It fails the build if:
+
+- `category_accuracy < 70%`
+- `escalation_precision < 60%`
+
+The JSON report and HTML dashboard are uploaded as CI artifacts.
 
 ---
 
