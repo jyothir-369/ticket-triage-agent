@@ -184,6 +184,25 @@ class EscalatedTicketOut(BaseModel):
     updated_at: str
 
 
+class UpdateDraftRequest(BaseModel):
+    """Request body for updating a ticket's draft text."""
+
+    draft_text: str = Field(
+        ...,
+        min_length=1,
+        max_length=5000,
+        description="New draft response text.",
+    )
+
+
+class UpdateDraftResponse(BaseModel):
+    """Response after updating the draft."""
+
+    ticket_id: str
+    status: str
+    message: str
+
+
 class EscalatedListResponse(BaseModel):
     """Paginated list of escalated tickets."""
 
@@ -191,6 +210,54 @@ class EscalatedListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class TicketListItem(BaseModel):
+    """Summary of a ticket for the queue list."""
+
+    ticket_id: str
+    content_preview: str
+    source: str = "api"
+    status: str = "open"
+    category: str | None = None
+    urgency: str | None = None
+    confidence: float | None = None
+    escalation_reason: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class TicketListResponse(BaseModel):
+    """Paginated list of all tickets with filtering."""
+
+    tickets: list[TicketListItem]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class TicketDetailResponse(BaseModel):
+    """Full detail of one ticket for the detail view."""
+
+    ticket_id: str
+    content: str
+    source: str = "api"
+    source_id: str | None = None
+    status: str = "open"
+    category: str | None = None
+    urgency: str | None = None
+    confidence: float | None = None
+    escalation_reason: str | None = None
+    draft_text: str | None = None
+    draft_citations: str | None = None
+    metadata: str | None = None
+    created_at: str
+    updated_at: str
+    processed_at: str | None = None
+    reviewed_at: str | None = None
+    review_decision: str | None = None
+    trace: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +442,18 @@ async def triage_ticket(
     if ticket is None:
         raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
 
-    if ticket.status not in ("pending", "open"):
+    # Allow triage on new tickets (pending/open) AND re-triage on finished
+    # tickets (resolved/escalated/failed/awaiting_review), but block while
+    # the pipeline is actively running on the ticket.
+    if ticket.status not in (
+        "pending",
+        "open",
+        "resolved",
+        "escalated",
+        "failed",
+        "awaiting_review",
+        "classified",
+    ):
         raise HTTPException(
             status_code=409,
             detail=f"Ticket {ticket_id} is already in status '{ticket.status}'",
@@ -697,4 +775,203 @@ async def list_escalated_tickets(
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /tickets/list — List all tickets with filtering, sorting, pagination
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/list",
+    response_model=TicketListResponse,
+    summary="List all tickets",
+    description="Returns a paginated, filterable, sortable list of all tickets.",
+)
+async def list_tickets(
+    search: str = Query(default="", description="Search in content and ticket ID."),
+    category: str = Query(default="", description="Comma-separated categories to filter."),
+    urgency: str = Query(default="", description="Comma-separated urgency levels to filter."),
+    status: str = Query(default="", description="Comma-separated statuses to filter."),
+    sort_by: str = Query(default="created_at", description="Field to sort by."),
+    sort_dir: str = Query(default="desc", description="Sort direction: asc or desc."),
+    page: int = Query(default=1, ge=1, description="Page number."),
+    page_size: int = Query(default=20, ge=1, le=100, description="Items per page."),
+    created_after: str = Query(default="", description="ISO date: tickets created after this."),
+    created_before: str = Query(default="", description="ISO date: tickets created before this."),
+    db: AsyncSession = Depends(get_db_session),
+):
+    from datetime import datetime as _dt
+
+    query = select(TicketModel)
+    count_query = select(func.count(TicketModel.id))
+
+    # ── Filters ─────────────────────────────────────────────────────────────
+    if search.strip():
+        like_pattern = f"%{search.strip()}%"
+        search_filter = TicketModel.id.ilike(like_pattern) | TicketModel.content.ilike(like_pattern)
+        query = query.where(search_filter)
+        count_query = count_query.where(search_filter)
+
+    if category.strip():
+        cats = [c.strip().lower() for c in category.split(",") if c.strip()]
+        if cats:
+            query = query.where(TicketModel.category.in_(cats))
+            count_query = count_query.where(TicketModel.category.in_(cats))
+
+    if urgency.strip():
+        urg_vals = [u.strip().lower() for u in urgency.split(",") if u.strip()]
+        if urg_vals:
+            query = query.where(TicketModel.urgency.in_(urg_vals))
+            count_query = count_query.where(TicketModel.urgency.in_(urg_vals))
+
+    if status.strip():
+        stat_vals = [s.strip().lower() for s in status.split(",") if s.strip()]
+        if stat_vals:
+            query = query.where(TicketModel.status.in_(stat_vals))
+            count_query = count_query.where(TicketModel.status.in_(stat_vals))
+
+    if created_after.strip():
+        try:
+            after_dt = _dt.fromisoformat(created_after.strip().replace("Z", "+00:00"))
+            query = query.where(TicketModel.created_at >= after_dt)
+            count_query = count_query.where(TicketModel.created_at >= after_dt)
+        except ValueError:
+            pass
+
+    if created_before.strip():
+        try:
+            before_dt = _dt.fromisoformat(created_before.strip().replace("Z", "+00:00"))
+            query = query.where(TicketModel.created_at <= before_dt)
+            count_query = count_query.where(TicketModel.created_at <= before_dt)
+        except ValueError:
+            pass
+
+    # ── Count ───────────────────────────────────────────────────────────────
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+    total_pages = max(1, (total + page_size - 1) // page_size)
+
+    # ── Sort ────────────────────────────────────────────────────────────────
+    sort_column_map = {
+        "created_at": TicketModel.created_at,
+        "updated_at": TicketModel.updated_at,
+        "confidence": TicketModel.confidence,
+        "urgency": TicketModel.urgency,
+        "status": TicketModel.status,
+        "category": TicketModel.category,
+    }
+    sort_col = sort_column_map.get(sort_by, TicketModel.created_at)
+    if sort_dir.lower() == "asc":
+        query = query.order_by(sort_col.asc().nulls_last())
+    else:
+        query = query.order_by(sort_col.desc().nulls_last())
+
+    # ── Paginate ────────────────────────────────────────────────────────────
+    offset = (page - 1) * page_size
+    query = query.offset(offset).limit(page_size)
+    result = await db.execute(query)
+    tickets = result.scalars().all()
+
+    return TicketListResponse(
+        tickets=[
+            TicketListItem(
+                ticket_id=t.id,
+                content_preview=t.content[:200] + ("..." if len(t.content) > 200 else ""),
+                source=t.source,
+                status=t.status,
+                category=t.category,
+                urgency=t.urgency,
+                confidence=t.confidence,
+                escalation_reason=t.escalation_reason,
+                created_at=t.created_at.isoformat(),
+                updated_at=t.updated_at.isoformat(),
+            )
+            for t in tickets
+        ],
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+    )
+
+
+# ---------------------------------------------------------------------------
+# PATCH /tickets/{id}/draft — Update the draft response text
+# ---------------------------------------------------------------------------
+
+
+@router.patch(
+    "/{ticket_id}/draft",
+    response_model=UpdateDraftResponse,
+    summary="Update draft response",
+    description="Replaces the ticket's draft response text (used for edit-and-approve).",
+)
+async def update_ticket_draft(
+    ticket_id: str,
+    request: UpdateDraftRequest,
+    db: AsyncSession = Depends(get_db_session),
+):
+    result = await db.execute(select(TicketModel).where(TicketModel.id == ticket_id))
+    ticket = result.scalar_one_or_none()
+
+    if ticket is None:
+        raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
+
+    now = datetime.now(UTC)
+    ticket.draft_text = request.draft_text
+    ticket.review_decision = None  # reset any prior decision since draft changed
+    ticket.updated_at = now
+    await db.flush()
+
+    logger.info("ticket.draft_updated", ticket_id=ticket_id)
+
+    return UpdateDraftResponse(
+        ticket_id=ticket_id,
+        status=ticket.status,
+        message="Draft updated successfully.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /tickets/{id} — Full ticket detail
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{ticket_id}",
+    response_model=TicketDetailResponse,
+    summary="Get full ticket detail",
+    description="Returns the full ticket row including content, draft, and trace.",
+)
+async def get_ticket_detail(
+    ticket_id: str,
+    db: AsyncSession = Depends(get_db_session),
+):
+    result = await db.execute(select(TicketModel).where(TicketModel.id == ticket_id))
+    ticket = result.scalar_one_or_none()
+
+    if ticket is None:
+        raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
+
+    return TicketDetailResponse(
+        ticket_id=ticket.id,
+        content=ticket.content,
+        source=ticket.source,
+        source_id=ticket.source_id,
+        status=ticket.status,
+        category=ticket.category,
+        urgency=ticket.urgency,
+        confidence=ticket.confidence,
+        escalation_reason=ticket.escalation_reason,
+        draft_text=ticket.draft_text,
+        draft_citations=ticket.draft_citations,
+        metadata=ticket.metadata_,
+        created_at=ticket.created_at.isoformat(),
+        updated_at=ticket.updated_at.isoformat(),
+        processed_at=ticket.processed_at.isoformat() if ticket.processed_at else None,
+        reviewed_at=ticket.reviewed_at.isoformat() if ticket.reviewed_at else None,
+        review_decision=ticket.review_decision,
+        trace=ticket.trace,
     )
