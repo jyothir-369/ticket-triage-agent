@@ -173,6 +173,10 @@ def preprocess_ticket(raw: dict[str, str]) -> dict[str, Any]:
             "custom_fields": {**extracted_meta, **custom_fields},
         },
         "created_at": created_at.isoformat(),
+        # Carry expected labels through so index_into_qdrant can store them in the
+        # Qdrant payload (retrieve_node filters search results by category/urgency).
+        "expected_category": raw.get("expected_category"),
+        "expected_urgency": raw.get("expected_urgency"),
     }
 
 

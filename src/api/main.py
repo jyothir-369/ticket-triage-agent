@@ -42,9 +42,6 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup ──────────────────────────────────────────────────────────────
-    # Validate configuration
-    settings.check_config()
-
     # Log environment info (redact sensitive values)
     db_host = settings.database_url.split("@")[-1] if "@" in settings.database_url else "local"
     qdrant_info = settings.qdrant_url or f"{settings.qdrant_host}:{settings.qdrant_port}"
@@ -254,6 +251,58 @@ _llm_health_cache: dict[str, Any] = {"result": None, "timestamp": 0.0}
 _LLM_HEALTH_CACHE_TTL = 60.0  # seconds
 
 
+async def _probe_llm_connectivity() -> "HealthCheckResult":
+    """Probe the configured LLM provider without generating a full completion.
+
+    Gemini uses the lightweight ``GET /v1beta/models`` endpoint, which only
+    verifies the API key and lists available models — faster than a full
+    completion and it doesn't burn generation quota (or depend on a specific
+    generation model being enabled for the key).  Other providers fall back
+    to a minimal chat completion.
+
+    Raises on failure so the caller (``check_llm``) records it as unhealthy.
+    """
+    provider = settings.llm_provider.lower()
+    start = time.monotonic()
+
+    if provider == "gemini":
+        if not settings.gemini_api_key:
+            raise ValueError("GEMINI_API_KEY is not configured")
+        import httpx
+
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/models"
+            f"?key={settings.gemini_api_key}"
+        )
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("models"):
+            raise ValueError("Gemini API returned no models")
+
+        latency = (time.monotonic() - start) * 1000
+        return HealthCheckResult(
+            status="healthy",
+            latency_ms=round(latency, 2),
+            message=f"Provider: gemini ({settings.gemini_model})",
+        )
+
+    # Non-Gemini providers — minimal cheap completion (primary only)
+    from langchain_core.messages import HumanMessage
+
+    from src.services.llm import call_llm_with_fallback
+
+    messages = [HumanMessage(content="Say 'ok' in one word.")]
+    await call_llm_with_fallback(messages, max_tokens=5, timeout_seconds=20)
+    latency = (time.monotonic() - start) * 1000
+    return HealthCheckResult(
+        status="healthy",
+        latency_ms=round(latency, 2),
+        message=f"Provider: {provider}",
+    )
+
+
 @app.get(
     "/health",
     response_model=HealthCheckResponse,
@@ -355,7 +404,7 @@ async def health_check():
 
             client = aioredis.from_url(settings.redis_url, **connect_kwargs)
             await client.ping()
-            await client.close()
+            await client.aclose()
             latency = (time.monotonic() - start) * 1000
             return HealthCheckResult(
                 status="healthy",
@@ -370,10 +419,14 @@ async def health_check():
             )
 
     async def check_llm() -> HealthCheckResult:
-        """Check LLM provider connectivity with cached real API call."""
-        global _llm_health_cache
-        import asyncio as _asyncio
+        """Check LLM provider connectivity with a cached lightweight probe.
 
+        Uses ``_probe_llm_connectivity`` — a cheap connectivity check instead
+        of a full completion — so the endpoint is fast, doesn't burn LLM quota,
+        and a model being unavailable for generation can't fail the probe.
+        Results are cached for ``_LLM_HEALTH_CACHE_TTL`` seconds.
+        """
+        global _llm_health_cache
         start = time.monotonic()
 
         # Check cache
@@ -384,21 +437,9 @@ async def health_check():
             return _llm_health_cache["result"]
 
         try:
-            from langchain_core.messages import HumanMessage
-
-            from src.services.llm import call_llm_with_fallback
-
-            # Make a real (cheap) API call to verify connectivity
-            messages = [HumanMessage(content="Say 'ok' in one word.")]
-            response = await _asyncio.wait_for(
-                call_llm_with_fallback(messages, max_tokens=5, timeout_seconds=10),
-                timeout=15.0,
-            )
-            latency = (time.monotonic() - start) * 1000
-            result = HealthCheckResult(
-                status="healthy",
-                latency_ms=round(latency, 2),
-                message=f"Provider: {settings.llm_provider}",
+            result = await asyncio.wait_for(
+                _probe_llm_connectivity(),
+                timeout=30.0,
             )
         except Exception as exc:
             latency = (time.monotonic() - start) * 1000

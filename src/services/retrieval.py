@@ -35,6 +35,7 @@ from qdrant_client.models import (
 )
 
 from src.config import get_settings
+from src.models.schemas import RetrievedDocument
 from src.utils.circuit_breaker import CircuitBreakerOpen, get_circuit_breaker
 
 logger = structlog.get_logger(__name__)
@@ -160,7 +161,7 @@ class QueryCache:
 
     async def close(self) -> None:
         if self._client is not None:
-            await self._client.close()
+            await self._client.aclose()
             self._client = None
 
 

@@ -627,20 +627,33 @@ async def escalate_node(state: AgentState) -> dict:
                 reason="No escalation decision was computed.",
             )
 
-        from src.models.schemas import TicketStatus
         from src.repository import TicketRepository
 
         repo = TicketRepository()
         trace = _ensure_trace(state)
 
-        # Update ticket status to ESCALATED
-        await repo.update_ticket_status(
-            ticket_id,
-            TicketStatus.ESCALATED.value,
-            trace={
-                "step": "escalate",
-                "status": TicketStatus.ESCALATED.value,
-                "data": escalation.to_dict(),
+        elapsed = _now_ms() - start
+        log.info(
+            "node.escalate.completed_in_memory",
+            reason=escalation.reason,
+            confidence_score=escalation.confidence_score,
+            duration_ms=elapsed,
+        )
+
+        # Mark escalate COMPLETED *before* persisting so the saved trace JSON
+        # contains the terminal step (previously the trace was written while
+        # escalate was still "running"). finalize_node runs right after this
+        # node (graph edge node_escalate → node_finalize) and persists the
+        # ticket status, so we no longer write a trace_steps row here.
+        _append_step(
+            state,
+            step_name="escalate",
+            status=StepStatus.COMPLETED,
+            duration_ms=elapsed,
+            data={
+                "escalated": True,
+                "reason": escalation.reason,
+                "confidence_score": escalation.confidence_score,
             },
         )
 
@@ -651,26 +664,6 @@ async def escalate_node(state: AgentState) -> dict:
                 "trace": json.dumps(trace.to_dict(), default=str),
                 "escalation_reason": escalation.reason,
                 "loop_count": state.get("loop_count", 0),
-            },
-        )
-
-        elapsed = _now_ms() - start
-        log.info(
-            "node.escalate.success",
-            reason=escalation.reason,
-            confidence_score=escalation.confidence_score,
-            duration_ms=elapsed,
-        )
-
-        _append_step(
-            state,
-            step_name="escalate",
-            status=StepStatus.COMPLETED,
-            duration_ms=elapsed,
-            data={
-                "escalated": True,
-                "reason": escalation.reason,
-                "confidence_score": escalation.confidence_score,
             },
         )
 
@@ -774,17 +767,9 @@ async def finalize_node(state: AgentState) -> dict:
         if should_escalate:
             trace.loop_detected = state.get("loop_count", 0) > settings.max_loop_retries
 
-        # Save the final trace
-        await repo.update_ticket(
-            ticket_id,
-            {
-                "trace": json.dumps(trace.to_dict(), default=str),
-                "status": final_status.value,
-                "loop_count": state.get("loop_count", 0),
-                "processed_at": datetime.now(UTC),
-            },
-        )
-
+        # Mark finalize COMPLETED *before* persisting so the saved trace JSON
+        # contains the terminal step (previously the completed step was appended
+        # after the DB write, leaving finalize stuck at "running").
         _append_step(
             state,
             step_name="finalize",
@@ -795,6 +780,17 @@ async def finalize_node(state: AgentState) -> dict:
                 "total_duration_ms": total_ms,
                 "loop_count": state.get("loop_count", 0),
                 "should_escalate": should_escalate,
+            },
+        )
+
+        # Save the final trace
+        await repo.update_ticket(
+            ticket_id,
+            {
+                "trace": json.dumps(trace.to_dict(), default=str),
+                "status": final_status.value,
+                "loop_count": state.get("loop_count", 0),
+                "processed_at": datetime.now(UTC),
             },
         )
 

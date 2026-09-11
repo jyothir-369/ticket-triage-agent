@@ -145,6 +145,30 @@ def get_llm(provider: str | None = None) -> BaseChatModel:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+def _normalise_response_text(content: Any) -> str:
+    """Extract clean text from a LangChain chat-model response ``content``.
+
+    ChatGoogleGenerativeAI (Gemini via LangChain) returns ``content`` as a
+    list of content blocks, e.g. ``[{'type': 'text', 'text': '...'}].``
+    Other providers return a plain ``str``.  ``str(content)`` on the block
+    list yields a Python repr that ``json.loads`` cannot parse, which caused
+    classify/draft to silently fall back to heuristics.  Normalise both
+    shapes to plain text here so every consumer gets valid JSON.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+            elif hasattr(block, "text"):
+                parts.append(str(block.text))
+        if parts:
+            return " ".join(parts).strip()
+    return str(content)
+
+
 async def call_llm(
     messages: list[BaseMessage],
     *,
@@ -209,7 +233,7 @@ async def call_llm(
             timeout=timeout_seconds,
         )
         breaker.record_success()
-        return response.content if isinstance(response.content, str) else str(response.content)
+        return _normalise_response_text(response.content)
 
     except TimeoutError:
         breaker.record_failure()

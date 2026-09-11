@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agent.graph import AgentExecutor
 from src.config import get_settings
-from src.models.database import get_db_session
+from src.models.database import get_db_session, get_session
 from src.models.schemas import (
     Ticket,
 )
@@ -118,6 +118,18 @@ class TraceOut(BaseModel):
 
     ticket_id: str
     steps: list[TraceStepOut]
+    final_status: str | None = Field(
+        default=None,
+        description="Lifecycle status of the ticket after the last triage run.",
+    )
+    total_duration_ms: int | None = Field(
+        default=None,
+        description="Total wall-clock time of the triage run, if recorded in the trace JSON.",
+    )
+    loop_count: int | None = Field(
+        default=None,
+        description="Agent loop-iteration count at the end of the run, if recorded.",
+    )
 
 
 class ApproveRequest(BaseModel):
@@ -208,7 +220,7 @@ async def _run_triage_background(ticket_id: str) -> None:
         await repo.update_ticket_status(ticket_id, "processing")
 
         # Fetch the ticket to get its content
-        async with get_db_session() as db:
+        async with get_session() as db:
             result = await db.execute(
                 select(TicketModel).where(TicketModel.id == ticket_id)
             )
@@ -428,38 +440,96 @@ async def get_trace(
     ticket_id: str,
     db: AsyncSession = Depends(get_db_session),
 ):
-    result = await db.execute(
+    """Return the full triage trace, merging the two trace sources.
+
+    Pipeline steps (classify / retrieve / draft / escalate_check / finalize)
+    are stored as a JSON serialisation of :class:`TriageTrace` on the ticket
+    row's ``trace`` column.  A handful of rows (escalate, manual_escalation)
+    are stored individually in the ``trace_steps`` table.
+
+    This endpoint unifies both sources into a single ordered step list so the
+    dashboard Trace Viewer shows the whole pipeline.  When a step name exists
+    in both sources the ``trace_steps`` row is preferred.
+    """
+    # ── 1. Fetch the ticket row — its trace JSON column + lifecycle status ──
+    ticket_result = await db.execute(
+        select(TicketModel).where(TicketModel.id == ticket_id)
+    )
+    ticket = ticket_result.scalar_one_or_none()
+    if ticket is None:
+        raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
+
+    # ── 2. Parse the ticket's trace JSON ────────────────────────────────────
+    json_steps: list[dict] = []
+    json_final_status: str | None = None
+    json_total_duration_ms: int | None = None
+    json_loop_count: int | None = None
+    if ticket.trace:
+        try:
+            trace_data = json.loads(ticket.trace)
+            if isinstance(trace_data, dict):
+                json_steps = trace_data.get("steps") or []
+                json_final_status = trace_data.get("final_status")
+                json_total_duration_ms = trace_data.get("total_duration_ms")
+                json_loop_count = trace_data.get("loop_count")
+        except (json.JSONDecodeError, AttributeError) as exc:
+            logger.warning("trace.invalid_ticket_json", ticket_id=ticket_id, error=str(exc))
+
+    # ── 3. Fetch trace_steps rows ───────────────────────────────────────────
+    db_result = await db.execute(
         select(TraceModel)
         .where(TraceModel.ticket_id == ticket_id)
         .order_by(TraceModel.timestamp)
     )
-    steps = result.scalars().all()
+    db_steps = list(db_result.scalars().all())
 
-    if not steps:
-        # Check if ticket exists at all
-        ticket_result = await db.execute(
-            select(TicketModel).where(TicketModel.id == ticket_id)
+    def _ts(value: Any) -> str | None:
+        """Normalise a timestamp (datetime | ISO str | None) to ISO string."""
+        if value is None:
+            return None
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        return str(value)
+
+    # ── 4. Merge — key by step name; prefer the trace_steps version ─────────
+    merged: dict[str, TraceStepOut] = {}
+    for step in json_steps:
+        if not isinstance(step, dict) or not step.get("step"):
+            continue
+        name = str(step["step"])
+        raw_data = step.get("data")
+        merged[name] = TraceStepOut(
+            step=name,
+            status=str(step.get("status", "unknown")),
+            timestamp=_ts(step.get("timestamp")),
+            duration_ms=step.get("duration_ms"),
+            data=raw_data if isinstance(raw_data, dict) else None,
+            error=step.get("error"),
         )
-        if ticket_result.scalar_one_or_none() is None:
-            raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
-        raise HTTPException(
-            status_code=404,
-            detail=f"No trace data for ticket {ticket_id}",
+
+    for s in db_steps:
+        merged[s.step] = TraceStepOut(
+            step=s.step,
+            status=s.status,
+            timestamp=s.timestamp.isoformat() if s.timestamp else None,
+            duration_ms=s.duration_ms,
+            data=json.loads(s.data) if s.data else None,
+            error=s.error,
         )
+
+    steps = sorted(merged.values(), key=lambda s: s.timestamp or "")
+
+    # ── 5. Top-level metadata ───────────────────────────────────────────────
+    # Prefer the final_status recorded on the trace; fall back to the ticket
+    # row's lifecycle status (handles tickets triaged before finalize set it).
+    final_status = json_final_status or ticket.status
 
     return TraceOut(
         ticket_id=ticket_id,
-        steps=[
-            TraceStepOut(
-                step=s.step,
-                status=s.status,
-                timestamp=s.timestamp.isoformat() if s.timestamp else None,
-                duration_ms=s.duration_ms,
-                data=json.loads(s.data) if s.data else None,
-                error=s.error,
-            )
-            for s in steps
-        ],
+        steps=steps,
+        final_status=final_status,
+        total_duration_ms=json_total_duration_ms,
+        loop_count=json_loop_count,
     )
 
 

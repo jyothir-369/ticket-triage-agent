@@ -12,7 +12,7 @@ Edges:
   START → classify → retrieve → draft → escalate_check
   escalate_check → escalate (when should_escalate is True)
   escalate_check → finalize (when should_escalate is False)
-  escalate → END
+  escalate → finalize (escalated tickets also finalize, so trace + final_status persist)
   finalize → END
 
 Loop detection: the agent tracks ``tool_call_count`` in state and routes
@@ -463,7 +463,9 @@ def build_triage_graph() -> StateGraph:
     )
 
     # Terminal edges
-    graph.add_edge("node_escalate", END)
+    # escalate flows into finalize so the full trace + final_status are persisted
+    # on the escalate branch too (previously escalate → END left final_status unset).
+    graph.add_edge("node_escalate", "node_finalize")
     graph.add_edge("node_finalize", END)
 
     return graph

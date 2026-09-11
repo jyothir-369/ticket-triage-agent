@@ -393,7 +393,7 @@ class EmbeddingCache:
     async def close(self) -> None:
         """Close the Redis connection."""
         if self._client is not None:
-            await self._client.close()
+            await self._client.aclose()
             self._client = None
 
 
@@ -516,7 +516,12 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
             response.raise_for_status()
 
         data = response.json()
-        embeddings = [item["embedding"]["values"] for item in data.get("embeddings", [])]
+        # batchEmbedContents returns {"embeddings": [{"values": [...], ...}, ...]} in the
+        # current API. Older responses wrapped each item as {"embedding": {"values": [...]}}.
+        embeddings = []
+        for item in data.get("embeddings", []):
+            emb = item.get("embedding") or item
+            embeddings.append(emb["values"])
         return embeddings
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
