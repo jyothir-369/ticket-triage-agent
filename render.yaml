@@ -1,0 +1,89 @@
+# =============================================================================
+# Render Blueprint — deploy both services from one config
+#
+# Deploy:    https://render.com/deploy?repo=https://github.com/jyothir-369/ticket-triage-agent
+# Docs:      https://render.com/docs/blueprint-spec
+#
+# envVars with `sync: false` are NOT set here — Render prompts for them at
+# deploy time (or they are set manually in the service dashboard). They hold
+# secrets, so never commit real values.
+# =============================================================================
+
+services:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # FastAPI backend
+  # ─────────────────────────────────────────────────────────────────────────────
+  - type: web
+    name: support-triage-api
+    runtime: docker
+    repo: https://github.com/jyothir-369/ticket-triage-agent
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: ohio                # Render region closest to the Neon DB (us-east-2)
+    healthCheckPath: /health
+    # NOTE: Schema is created automatically by Base.metadata.create_all in the
+    # app's lifespan (see src/api/main.py). This repo has no authored alembic
+    # migrations (alembic/versions/ is empty), so no preDeployCommand is needed.
+    # If real migrations are added later, add here:
+    #   preDeployCommand: alembic upgrade head
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+
+      - key: PORT
+        value: 8000
+
+      # ── Secrets — set manually in the Render dashboard ────────────────────
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: DASHBOARD_PASSWORD
+        sync: false
+
+      # ── Non-secret tunables ───────────────────────────────────────────────
+      - key: GEMINI_MODEL
+        value: gemini-flash-lite-latest
+      - key: OPENROUTER_BASE_URL
+        value: https://openrouter.ai/api/v1
+      - key: OPENROUTER_MODEL
+        value: google/gemma-4-31b-it:free
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: LLM_FALLBACK_PROVIDER
+        value: openrouter
+      - key: DASHBOARD_USERNAME
+        value: admin
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Streamlit dashboard
+  # ─────────────────────────────────────────────────────────────────────────────
+  - type: web
+    name: support-triage-dashboard
+    runtime: docker
+    repo: https://github.com/jyothir-369/ticket-triage-agent
+    dockerfilePath: ./Dockerfile.streamlit
+    plan: free
+    region: ohio
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: PORT
+        value: 8501
+      # The deployed dashboard talks to the deployed API over HTTPS.
+      - key: API_URL
+        value: https://support-triage-api.onrender.com
+      - key: DASHBOARD_USERNAME
+        value: admin
+
+      # ── Secret — set manually in the Render dashboard ────────────────────
+      # MUST match the value set on the support-triage-api service.
+      - key: DASHBOARD_PASSWORD
+        sync: false

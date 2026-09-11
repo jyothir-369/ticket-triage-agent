@@ -144,7 +144,13 @@ def login_form() -> None:
                 )
         st.markdown("</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
-    st.caption("Default credentials for this demo: `admin` / `admin`")
+    # Only advertise the default demo credentials when the operator has not
+    # overridden the password (development). In production DASHBOARD_PASSWORD
+    # is set from the environment and must be supplied by the reviewer.
+    if DEFAULT_PASSWORD == "admin":
+        st.caption("Local/demo instance — default credentials: `admin` / `admin`")
+    else:
+        st.caption("Production instance — use the credentials provided by the operator.")
 
 
 def logout() -> None:

@@ -2,6 +2,22 @@
 
 An AI agent that classifies incoming support tickets, retrieves related past tickets and documentation, drafts response suggestions, and escalates ambiguous cases to human reviewers — with a full audit trail for every decision.
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/jyothir-369/ticket-triage-agent)
+
+Full deployment walkthrough: see **[DEPLOYMENT.md](DEPLOYMENT.md)**.
+
+---
+
+## 🌍 Live Demo
+
+Deployed on Render's free tier. Note: free-tier services sleep after **15
+minutes** of inactivity — the first request after sleep takes ~30 s to wake up.
+
+- **Dashboard**: https://support-triage-dashboard.onrender.com (login: `admin` / the `DASHBOARD_PASSWORD` set at deploy time)
+- **API**: https://support-triage-api.onrender.com
+- **API docs (Swagger)**: https://support-triage-api.onrender.com/docs
+- **Health check**: https://support-triage-api.onrender.com/health
+
 ---
 
 ## ✨ Features

@@ -1,0 +1,53 @@
+# =============================================================================
+# Docker build context exclusions
+#
+# The images only need: pyproject.toml, src/, alembic/, alembic.ini,
+# dashboard/ (Streamlit image), and scripts/ingest_tickets.py is run against
+# the deployed Qdrant from local, not from inside the image.
+# =============================================================================
+
+# VCS
+.git
+.github
+.gitignore
+
+# Secrets — NEVER ship credentials into an image
+.env
+.env.*
+!.env.example
+.venv
+
+# Tests / eval / docs — not deployed inside the containers
+tests/
+eval/
+docs/
+
+# Python caches & build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+.mypy_cache/
+
+# Local dev artifacts
+node_modules/
+Makefile
+docker-compose.yml
+docker-compose.prod.yml
+*.log
+*.png
+*.db
+*.sqlite3
+body.json
+body_escalate.json
+verify_bug.py
+check_all.py
+check_env.py
+
+# Data / media (large, not needed in the image)
+data/

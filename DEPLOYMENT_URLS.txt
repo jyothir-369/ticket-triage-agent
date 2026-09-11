@@ -1,0 +1,12 @@
+# Support-Ticket Triage Agent — Public Deployment URLs (Render free tier)
+# Generated: 2026-09-11
+# NOTE: These URLs go live once the Render services are created (see DEPLOYMENT.md).
+
+API URL:            https://support-triage-api.onrender.com
+Dashboard URL:      https://support-triage-dashboard.onrender.com
+API docs (Swagger): https://support-triage-api.onrender.com/docs
+Health check:       https://support-triage-api.onrender.com/health
+
+# Services are created from render.yaml (Blueprint). Free tier:
+#   - sleeps after 15 min idle; first request takes ~30 s to wake
+#   - 750 instance-hours/month shared across all free services

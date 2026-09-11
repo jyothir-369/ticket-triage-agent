@@ -210,3 +210,26 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Deploy — trigger Render rebuilds via deploy hooks (main-only, after CI)
+  # ─────────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to Render
+    runs-on: ubuntu-latest
+    needs: [lint, test, eval]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Trigger API deploy
+        if: secrets.RENDER_DEPLOY_HOOK_API != ''
+        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_API }}"
+
+      - name: Trigger dashboard deploy
+        if: secrets.RENDER_DEPLOY_HOOK_DASHBOARD != ''
+        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_DASHBOARD }}"
+
+      - name: Skip — deploy hooks not configured
+        if: secrets.RENDER_DEPLOY_HOOK_API == '' || secrets.RENDER_DEPLOY_HOOK_DASHBOARD == ''
+        run: |
+          echo "::warning::Render deploy hooks not configured. Add RENDER_DEPLOY_HOOK_API and RENDER_DEPLOY_HOOK_DASHBOARD as repo secrets (see DEPLOYMENT.md §CI/CD) to enable automatic deploys."
+          echo "This job does not fail CI when the hooks are missing — it only skips the POST."
