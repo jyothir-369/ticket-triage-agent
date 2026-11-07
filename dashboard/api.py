@@ -18,6 +18,12 @@ import streamlit as st
 API_BASE = os.environ.get("API_URL", "http://localhost:8000")
 DEFAULT_USERNAME = os.environ.get("DASHBOARD_USERNAME", "admin")
 DEFAULT_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "admin")
+# Dashboard→backend auth key; falls back to DASHBOARD_API_KEY env var.
+try:
+    from src.config import get_settings
+    _DASHBOARD_API_KEY = get_settings().dashboard_api_key
+except Exception:  # noqa: BLE001 — never break the dashboard on config errors
+    _DASHBOARD_API_KEY = ""
 
 REQUEST_TIMEOUT = 15.0
 POST_TIMEOUT = 90.0
@@ -41,8 +47,11 @@ def _describe(e: Exception) -> dict:
 
 def api_get(endpoint: str, params: dict | None = None, timeout: float = REQUEST_TIMEOUT):
     """GET + parse JSON. Returns parsed JSON or ``None`` on failure."""
+    headers = {}
+    if _DASHBOARD_API_KEY:
+        headers["X-API-Key"] = _DASHBOARD_API_KEY
     try:
-        resp = httpx.get(f"{API_BASE}{endpoint}", params=params, timeout=timeout)
+        resp = httpx.get(f"{API_BASE}{endpoint}", params=params, timeout=timeout, headers=headers)
         resp.raise_for_status()
         record_api_error(None)
         return resp.json()
@@ -53,8 +62,11 @@ def api_get(endpoint: str, params: dict | None = None, timeout: float = REQUEST_
 
 def api_post(endpoint: str, json_data: dict | None = None, timeout: float = POST_TIMEOUT):
     """POST (or PATCH/DELETE when ``method`` is overridden) + parse JSON."""
+    headers = {}
+    if _DASHBOARD_API_KEY:
+        headers["X-API-Key"] = _DASHBOARD_API_KEY
     try:
-        resp = httpx.post(f"{API_BASE}{endpoint}", json=json_data, timeout=timeout)
+        resp = httpx.post(f"{API_BASE}{endpoint}", json=json_data, timeout=timeout, headers=headers)
         resp.raise_for_status()
         record_api_error(None)
         return resp.json()
@@ -65,8 +77,11 @@ def api_post(endpoint: str, json_data: dict | None = None, timeout: float = POST
 
 def api_patch(endpoint: str, json_data: dict | None = None, timeout: float = POST_TIMEOUT):
     """PATCH a resource and parse JSON (used for draft updates)."""
+    headers = {}
+    if _DASHBOARD_API_KEY:
+        headers["X-API-Key"] = _DASHBOARD_API_KEY
     try:
-        resp = httpx.patch(f"{API_BASE}{endpoint}", json=json_data, timeout=timeout)
+        resp = httpx.patch(f"{API_BASE}{endpoint}", json=json_data, timeout=timeout, headers=headers)
         resp.raise_for_status()
         record_api_error(None)
         return resp.json()
@@ -76,9 +91,24 @@ def api_patch(endpoint: str, json_data: dict | None = None, timeout: float = POS
 
 
 def check_backend_health() -> dict | None:
-    """Thin wrapper around ``/health`` — returns the payload or ``None``."""
+    """Thin wrapper around ``/health`` — returns the payload or ``None``.
+
+    Uses the same timeout as other API calls for consistency. Before v1.3.2,
+    the health-check used a hard-coded 8-second timeout, which meant slow but
+    reachable dependencies would trigger a "connection"-style offline error.
+    The request-timeout and error-type mismatch caused the dashboard to show
+    "API offline" even when the FastAPI process was up and serving health.
+    The backend health endpoint aggregates per‑dependency status, so an HTTP
+    200 with any unhealthy/lost dependency is a "degraded" situation, not a
+    genuine offline event. Only failures to even reach FastAPI (timeout,
+    connection refused, DNS error) should render as "API offline".
+
+    Health probes intentionally skip ``X-API-Key`` — they are side-channel
+    Kubernetes readiness / liveness checks that must never fail just because
+    auth is engaged. Ticket endpoints below all require it.
+    """
     try:
-        resp = httpx.get(f"{API_BASE}/health", timeout=8)
+        resp = httpx.get(f"{API_BASE}/health", timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
         record_api_error(None)
         return resp.json()
@@ -94,8 +124,9 @@ def check_backend_health() -> dict | None:
 
 def _raw_fetch(path: str, params: dict | None, timeout: float) -> tuple[str, dict | None]:
     """One HTTP GET; returns (path, json) or (path, None) on failure."""
+    headers = {} if not _DASHBOARD_API_KEY else {"X-API-Key": _DASHBOARD_API_KEY}
     try:
-        resp = httpx.get(f"{API_BASE}{path}", params=params, timeout=timeout)
+        resp = httpx.get(f"{API_BASE}{path}", params=params, timeout=timeout, headers=headers)
         resp.raise_for_status()
         return path, resp.json()
     except Exception:  # noqa: BLE001

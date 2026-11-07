@@ -11,9 +11,9 @@ from unittest.mock import MagicMock, patch
 
 def test_api_get_constructs_correct_url():
     """api_get should construct the correct URL from API_BASE and endpoint."""
-    from dashboard.app import api_get
+    from dashboard.api import api_get
 
-    with patch("dashboard.app.httpx") as mock_httpx:
+    with patch("dashboard.api.httpx") as mock_httpx:
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"status": "ok"}
         mock_resp.raise_for_status = MagicMock()
@@ -27,9 +27,9 @@ def test_api_get_constructs_correct_url():
 
 def test_api_post_constructs_correct_url():
     """api_post should construct the correct URL and pass json_data."""
-    from dashboard.app import api_post
+    from dashboard.api import api_post
 
-    with patch("dashboard.app.httpx") as mock_httpx:
+    with patch("dashboard.api.httpx") as mock_httpx:
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"ticket_id": "123"}
         mock_resp.raise_for_status = MagicMock()
@@ -44,27 +44,29 @@ def test_api_post_constructs_correct_url():
 
 def test_api_get_returns_none_on_error():
     """api_get should return None and not raise on HTTP errors."""
-    from dashboard.app import api_get
+    from dashboard.api import api_get
 
-    with patch("dashboard.app.httpx") as mock_httpx:
+    with patch("dashboard.api.httpx") as mock_httpx:
         mock_httpx.get.side_effect = Exception("Connection refused")
-        result = api_get("/health")
+        with patch("dashboard.api._describe", return_value={"type": "unknown"}):
+            result = api_get("/health")
         assert result is None
 
 
 def test_api_post_returns_none_on_error():
     """api_post should return None and not raise on HTTP errors."""
-    from dashboard.app import api_post
+    from dashboard.api import api_post
 
-    with patch("dashboard.app.httpx") as mock_httpx:
+    with patch("dashboard.api.httpx") as mock_httpx:
         mock_httpx.post.side_effect = Exception("Connection refused")
-        result = api_post("/tickets/", json_data={"content": "test"})
+        with patch("dashboard.api._describe", return_value={"type": "unknown"}):
+            result = api_post("/tickets/", json_data={"content": "test"})
         assert result is None
 
 
 def test_login_default_credentials():
     """Default credentials should be admin/admin."""
-    from dashboard.app import DEFAULT_PASSWORD, DEFAULT_USERNAME
+    from dashboard.api import DEFAULT_PASSWORD, DEFAULT_USERNAME
 
     assert DEFAULT_USERNAME == "admin"
     assert DEFAULT_PASSWORD == "admin"
@@ -76,11 +78,11 @@ def test_login_env_override():
         # Re-import to pick up env changes
         import importlib
 
-        import dashboard.app
-        importlib.reload(dashboard.app)
+        import dashboard.api
+        importlib.reload(dashboard.api)
 
-        assert dashboard.app.DEFAULT_USERNAME == "custom_user"
-        assert dashboard.app.DEFAULT_PASSWORD == "custom_pass"
+        assert dashboard.api.DEFAULT_USERNAME == "custom_user"
+        assert dashboard.api.DEFAULT_PASSWORD == "custom_pass"
 
 
 def test_logout_clears_session_state():

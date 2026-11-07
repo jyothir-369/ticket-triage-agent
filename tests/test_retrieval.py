@@ -13,6 +13,11 @@ from src.services.retrieval import (
     get_retriever,
     search_tickets,
 )
+from src.services.embedding import (
+    GeminiEmbeddingProvider,
+    OpenAIEmbeddingProvider,
+    SentenceTransformerProvider,
+)
 from src.utils.circuit_breaker import CircuitBreaker
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -22,19 +27,19 @@ from src.utils.circuit_breaker import CircuitBreaker
 
 class TestCircuitBreaker:
     def test_starts_closed(self):
-        cb = CircuitBreaker(failure_threshold=3, failure_window_seconds=60.0)
+        cb = CircuitBreaker(name="test", failure_threshold=3, timeout=60.0)
         assert cb.state == "closed"
         assert cb.allow_request() is True
 
     def test_opens_after_threshold_failures(self):
-        cb = CircuitBreaker(failure_threshold=3, failure_window_seconds=60.0)
+        cb = CircuitBreaker(name="test", failure_threshold=3, timeout=60.0)
         for _ in range(3):
             cb.record_failure()
         assert cb.state == "open"
         assert cb.allow_request() is False
 
     def test_resets_on_success(self):
-        cb = CircuitBreaker(failure_threshold=3, failure_window_seconds=60.0)
+        cb = CircuitBreaker(name="test", failure_threshold=3, timeout=60.0)
         cb.record_failure()
         cb.record_failure()
         cb.record_success()
@@ -42,9 +47,7 @@ class TestCircuitBreaker:
         assert cb.allow_request() is True
 
     def test_half_open_after_recovery_timeout(self):
-        cb = CircuitBreaker(
-            failure_threshold=3, failure_window_seconds=60.0, recovery_timeout_seconds=0.1
-        )
+        cb = CircuitBreaker(name="test", failure_threshold=3, timeout=0.1)
         for _ in range(3):
             cb.record_failure()
         assert cb.state == "open"
@@ -55,9 +58,7 @@ class TestCircuitBreaker:
         assert cb.allow_request() is True
 
     def test_reopens_on_failure_in_half_open(self):
-        cb = CircuitBreaker(
-            failure_threshold=3, failure_window_seconds=60.0, recovery_timeout_seconds=0.1
-        )
+        cb = CircuitBreaker(name="test", failure_threshold=3, timeout=0.1)
         for _ in range(3):
             cb.record_failure()
 
@@ -69,9 +70,7 @@ class TestCircuitBreaker:
         assert cb.state == "open"
 
     def test_closes_on_success_in_half_open(self):
-        cb = CircuitBreaker(
-            failure_threshold=3, failure_window_seconds=60.0, recovery_timeout_seconds=0.1
-        )
+        cb = CircuitBreaker(name="test", failure_threshold=3, timeout=0.1)
         for _ in range(3):
             cb.record_failure()
 
@@ -83,17 +82,15 @@ class TestCircuitBreaker:
         assert cb.state == "closed"
         assert cb.allow_request() is True
 
-    def test_prunes_old_failures(self):
-        cb = CircuitBreaker(failure_threshold=3, failure_window_seconds=0.05)
-        cb.record_failure()
-
-        import time
-        time.sleep(0.1)
-
+    def test_consecutive_failures_open_circuit(self):
+        cb = CircuitBreaker(name="test", failure_threshold=3, timeout=60.0)
         cb.record_failure()
         cb.record_failure()
-        # Only 2 failures in the window (first one was pruned)
+        # Only 2 consecutive failures — still closed
         assert cb.state == "closed"
+        # Third failure opens it
+        cb.record_failure()
+        assert cb.state == "open"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -165,7 +162,7 @@ class TestTicketRetrieverEnsureCollection:
     def test_skips_creation_when_exists(self):
         retriever = TicketRetriever(use_cache=False)
         mock_collection = MagicMock()
-        mock_collection.name = "tickets"
+        mock_collection.name = retriever.COLLECTION_NAME  # use actual collection name
         mock_client = MagicMock()
         mock_client.get_collections.return_value.collections = [mock_collection]
         retriever._client = mock_client
@@ -187,6 +184,58 @@ class TestTicketRetrieverEnsureCollection:
         mock_client.create_collection.assert_called_once()
 
 
+class TestTicketRetrieverDimensionCompatibility:
+    """B1 regression — ensure_collection_exists must raise loud on dimension mismatch."""
+
+    @patch("src.services.embedding.get_embedding_provider", return_value=SentenceTransformerProvider())
+    def test_mismatch_raises_when_vector_size_does_not_match_provider(
+        self, _mock_prov
+    ):
+        """ST emits 384; collection forced to 1536 → ValueError loud."""
+        retriever = TicketRetriever(use_cache=False)
+        mock_client = MagicMock()
+        mock_client.get_collections.return_value.collections = []
+        retriever._client = mock_client
+
+        with pytest.raises(ValueError, match="Embedding dimension mismatch"):
+            retriever.ensure_collection_exists()
+
+    @patch("src.services.embedding.get_embedding_provider", return_value=SentenceTransformerProvider())
+    def test_match_dimensions_does_not_raise(self, _mock_prov):
+        """384 collection and ST provider agree → no exception."""
+        retriever = TicketRetriever(use_cache=False)
+        mock_client = MagicMock()
+        mock_client.get_collections.return_value.collections = []
+        retriever._client = mock_client
+        TicketRetriever.VECTOR_SIZE = 384
+
+        with patch(
+            "src.services.embedding.get_embedding_provider",
+            return_value=SentenceTransformerProvider(),
+        ):
+            retriever.ensure_collection_exists()  # should not raise
+
+    @patch("src.services.embedding.get_embedding_provider", return_value=OpenAIEmbeddingProvider(api_key="sk-test"))
+    def test_openai_dimension_matches_default_vector_size(self, _mock_prov):
+        """OpenAI (1536) vs default collection size (1536) → no raise."""
+        retriever = TicketRetriever(use_cache=False)
+        mock_client = MagicMock()
+        mock_client.get_collections.return_value.collections = []
+        retriever._client = mock_client
+        TicketRetriever.VECTOR_SIZE = 1536
+        retriever.ensure_collection_exists()  # should not raise
+
+    @patch("src.services.embedding.get_embedding_provider", return_value=GeminiEmbeddingProvider(api_key="gem-test"))
+    def test_gemini_dimension_matches_default_vector_size(self, _mock_prov):
+        """Gemini (1536) vs default collection size (1536) → no raise."""
+        retriever = TicketRetriever(use_cache=False)
+        mock_client = MagicMock()
+        mock_client.get_collections.return_value.collections = []
+        retriever._client = mock_client
+        TicketRetriever.VECTOR_SIZE = 1536
+        retriever.ensure_collection_exists()  # should not raise
+
+
 class TestTicketRetrieverAddDocument:
     @pytest.mark.asyncio
     async def test_add_document_success(self):
@@ -196,6 +245,7 @@ class TestTicketRetrieverAddDocument:
         retriever._client = mock_client
 
         mock_provider = MagicMock()
+        mock_provider.get_dimension.return_value = 1536
         mock_provider.embed = AsyncMock(return_value=[[0.1] * 1536])
 
         with patch("src.services.embedding.get_embedding_provider", return_value=mock_provider):
@@ -229,8 +279,12 @@ class TestTicketRetrieverAddDocument:
     @pytest.mark.asyncio
     async def test_add_document_circuit_breaker_open(self):
         retriever = TicketRetriever(use_cache=False)
-        retriever._circuit_breaker._state = "open"
-        retriever._circuit_breaker._opened_at = time.monotonic()
+        # Use a local circuit breaker to avoid polluting the global singleton
+        from src.utils.circuit_breaker import CircuitBreaker as CB
+        local_cb = CB(name="test_add_open", failure_threshold=1, timeout=60.0)
+        local_cb._state = "open"
+        local_cb._last_failure_time = time.monotonic()
+        retriever._circuit_breaker = local_cb
 
         result = await retriever.add_document(
             doc_id="doc-1",
@@ -298,6 +352,7 @@ class TestTicketRetrieverBulkIndex:
         retriever._client = mock_client
 
         mock_provider = MagicMock()
+        mock_provider.get_dimension.return_value = 1536
         mock_provider.embed = AsyncMock(return_value=[[0.1] * 1536] * 2)
 
         docs = [
@@ -315,8 +370,11 @@ class TestTicketRetrieverBulkIndex:
     @pytest.mark.asyncio
     async def test_bulk_index_circuit_breaker_open(self):
         retriever = TicketRetriever(use_cache=False)
-        retriever._circuit_breaker._state = "open"
-        retriever._circuit_breaker._opened_at = time.monotonic()
+        from src.utils.circuit_breaker import CircuitBreaker as CB
+        local_cb = CB(name="test_bulk_open", failure_threshold=1, timeout=60.0)
+        local_cb._state = "open"
+        local_cb._last_failure_time = time.monotonic()
+        retriever._circuit_breaker = local_cb
 
         result = await retriever.bulk_index(
             [{"doc_id": "1", "content": "c", "embedding": [0.1] * 1536}]
@@ -334,6 +392,7 @@ class TestTicketRetrieverSearch:
         retriever._client = mock_client
 
         mock_provider = MagicMock()
+        mock_provider.get_dimension.return_value = 1536
         mock_provider.embed = AsyncMock(return_value=[[0.1] * 1536])
 
         with patch("src.services.embedding.get_embedding_provider", return_value=mock_provider):
@@ -344,8 +403,11 @@ class TestTicketRetrieverSearch:
     @pytest.mark.asyncio
     async def test_search_circuit_breaker_open(self):
         retriever = TicketRetriever(use_cache=False)
-        retriever._circuit_breaker._state = "open"
-        retriever._circuit_breaker._opened_at = time.monotonic()
+        from src.utils.circuit_breaker import CircuitBreaker as CB
+        local_cb = CB(name="test_search_open", failure_threshold=1, timeout=60.0)
+        local_cb._state = "open"
+        local_cb._last_failure_time = time.monotonic()
+        retriever._circuit_breaker = local_cb
 
         results = await retriever.search("test query")
         assert results == []

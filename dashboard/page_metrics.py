@@ -43,6 +43,10 @@ def metrics_bundle(days: int) -> dict:
 def _kpi_sparkline(values: list, color: str) -> go.Figure:
     """Tiny inline line chart for a KPI card."""
     xs = list(range(len(values)))
+    # Normalize shorthand hex (#rgb / #rrggbb) to 6-digit before appending alpha
+    # so fillcolor always passes Plotly's color validator.
+    if len(color) == 4:  # e.g. '#fff'
+        color = "#" + "".join(d * 2 for d in color[1:])
     fig = go.Figure(
         go.Scatter(
             x=xs,
@@ -89,8 +93,10 @@ def _trend_html(values: list) -> str:
     return f'<span class="trend {cls}">{arrow} {abs(delta):.1f}%</span>'
 
 
-def _render_kpi(label: str, raw_value: float, fmt: callable, spark: list, accent: str, spark_color: str) -> None:
+def _render_kpi(label: str, raw_value: float, fmt: callable, spark: list, accent: str, spark_color: str, key: str = "") -> None:
     """Render one KPI card column: value, trend, sparkline (last 7 periods)."""
+    kv = label.lower().replace(" ", "_") if not key else f"{key}_{label}"
+    vkey = kv.replace("/", "-")
     st.markdown(
         f"""
         <div class="kpi-card {accent}">
@@ -102,7 +108,7 @@ def _render_kpi(label: str, raw_value: float, fmt: callable, spark: list, accent
         unsafe_allow_html=True,
     )
     spark_series = spark[-7:] if len(spark) > 7 else spark
-    st.plotly_chart(_kpi_sparkline(spark_series, spark_color), use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(_kpi_sparkline(spark_series, spark_color), width="stretch", config={"displayModeBar": False}, key=vkey)
 
 
 def render_metrics_page() -> None:
@@ -167,16 +173,16 @@ def render_metrics_page() -> None:
     st.markdown('<div class="kpi-row">', unsafe_allow_html=True)
     k5 = st.columns(5)
     with k5[0]:
-        _render_kpi("Total Tickets", total, fmt_int, daily_total + prev_total, "accent", c["brand"])
+        _render_kpi("Total Tickets", total, fmt_int, daily_total + prev_total, "accent", c["brand"], key="total_tickets")
     with k5[1]:
-        _render_kpi("Processed", metrics.get("processed_tickets", 0), fmt_int, daily_processed + prev_processed, "ok", c["green"])
+        _render_kpi("Processed", metrics.get("processed_tickets", 0), fmt_int, daily_processed + prev_processed, "ok", c["green"], key="processed")
     with k5[2]:
-        _render_kpi("Escalated", metrics.get("escalated_tickets", 0), fmt_int, daily_escalated + prev_escalated, "warn", c["amber"])
+        _render_kpi("Escalated", metrics.get("escalated_tickets", 0), fmt_int, daily_escalated + prev_escalated, "warn", c["amber"], key="escalated")
     with k5[3]:
         avg_conf = metrics.get("avg_confidence") or 0.0
-        _render_kpi("Avg Confidence", avg_conf, fmt_pct, daily_confidence + prev_confidence, "accent", c["blue"])
+        _render_kpi("Avg Confidence", avg_conf, fmt_pct, daily_confidence + prev_confidence, "accent", c["blue"], key="avg_confidence")
     with k5[4]:
-        _render_kpi("Success Rate", metrics.get("success_rate", 0), fmt_pct, daily_success + prev_success, "ok", c["green"])
+        _render_kpi("Success Rate", metrics.get("success_rate", 0), fmt_pct, daily_success + prev_success, "ok", c["green"], key="success_rate")
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("---")
@@ -210,7 +216,7 @@ def render_metrics_page() -> None:
             xaxis=dict(showgrid=False, color=c["axis"], tickangle=-30),
             yaxis=dict(showgrid=True, gridcolor=c["grid"], color=c["axis"], zeroline=False),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch", key="ts_stacked")
 
     # ── Two-column distribution row ──
     col_a, col_b = st.columns(2)
@@ -238,7 +244,7 @@ def render_metrics_page() -> None:
                 xaxis=dict(showgrid=True, gridcolor=c["grid"], color=c["axis"]),
                 yaxis=dict(showgrid=False, color=c["axis"]),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch", key="cat_dist")
         else:
             empty_state("📁", "No Categories Yet", "Categories appear once tickets are triaged.")
 
@@ -283,7 +289,7 @@ def render_metrics_page() -> None:
                 xaxis=dict(showgrid=False, color=c["axis"]),
                 yaxis=dict(showgrid=True, gridcolor=c["grid"], color=c["axis"], zeroline=False),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch", key="urg_dist")
         else:
             empty_state("⚡", "No Urgency Data", "Urgency distribution appears after triage runs.")
 
@@ -309,7 +315,7 @@ def render_metrics_page() -> None:
             xaxis=dict(showgrid=False, color=c["axis"], categoryorder="array", categoryarray=labels),
             yaxis=dict(showgrid=True, gridcolor=c["grid"], color=c["axis"], zeroline=False),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch", key="conf_hist")
 
     # ── Escalation reasons + model/cost cards ──
     reason_items = (reasons or {}).get("reasons", [])
@@ -331,7 +337,7 @@ def render_metrics_page() -> None:
                 font=dict(color=c["text"]),
                 legend=dict(orientation="v", font=dict(size=10)),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch", key="esc_reasons_pie")
         else:
             empty_state("🚨", "No Escalations Yet", "Escalation reasons will appear once tickets are escalated.")
 

@@ -21,7 +21,7 @@ class TestSettingsDefaults:
 
     def test_default_triage_timeout(self):
         s = Settings()
-        assert s.triage_timeout_seconds == 30
+        assert s.triage_timeout_seconds == 120
 
     def test_default_qdrant(self):
         s = Settings()
@@ -110,4 +110,28 @@ class TestGetSettingsSingleton:
         s1 = get_settings()
         s2 = get_settings()
         assert s1 is s2
+
+
+class TestDashboardApiKeyEnforcement:
+    """DASHBOARD_API_KEY is mandatory in production but optional elsewhere."""
+
+    def test_default_dashboard_api_key_empty(self):
+        """In non-production the key defaults to '' (local dev only)."""
+        s = Settings()
+        assert s.dashboard_api_key == ""
+
+    def test_non_prod_allows_blank(self):
+        """Development is allowed to leave it blank."""
+        s = Settings(environment="development")
+        assert s.dashboard_api_key == ""
+
+    def test_production_blocks_blank(self):
+        """Production startup is blocked when the key is not set."""
+        with pytest.raises(ValueError, match="DASHBOARD_API_KEY must be set"):
+            Settings(environment="production", dashboard_api_key="")
+
+    def test_production_accepts_key(self):
+        """A real key unblocks production startup."""
+        s = Settings(environment="production", dashboard_api_key="sk-dash-test")
+        assert s.dashboard_api_key == "sk-dash-test"
 

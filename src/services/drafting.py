@@ -238,12 +238,12 @@ class DraftGenerator:
     def __init__(
         self,
         *,
-        model_name: str = "claude-sonnet-4-20250514",
+        model_name: str | None = None,
         timeout_seconds: float = 15.0,
         max_retries: int = 3,
         max_rewrite_attempts: int = 2,
     ) -> None:
-        self.model_name = model_name
+        self.model_name = model_name or "claude-sonnet-4-20250514"
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.max_rewrite_attempts = max_rewrite_attempts

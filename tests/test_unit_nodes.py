@@ -356,7 +356,7 @@ class TestEscalateNode:
             result = await escalate_node(sample_agent_state_escalated)
 
             assert "trace" in result
-            mock_repo.update_ticket_status.assert_called_once()
+            mock_repo.update_ticket.assert_called_once()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

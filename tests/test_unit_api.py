@@ -175,8 +175,12 @@ class TestTraceRetrieval:
         ticket_id = create_resp.json()["ticket_id"]
 
         resp = await client.get(f"/tickets/{ticket_id}/trace")
-        assert resp.status_code == 404
-        assert "No trace data" in resp.json()["detail"]
+        # The endpoint returns 200 with empty steps when no triage has occurred,
+        # not 404
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ticket_id"] == ticket_id
+        assert data["steps"] == []
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

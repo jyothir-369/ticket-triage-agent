@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "skills": {
+    "fastapi": {
+      "source": "fastapi/fastapi",
+      "sourceType": "github",
+      "skillPath": "fastapi/.agents/skills/fastapi/SKILL.md",
+      "computedHash": "ff680b56037089d5f4cb399af70b0f9efd3d332887be464db11864b14eb3ad93"
+    },
+    "langgraph": {
+      "source": "langchain-ai/docs",
+      "sourceType": "github",
+      "skillPath": "src/.mintlify/skills/langgraph/SKILL.md",
+      "computedHash": "ccf22e2089d2ea327f75b32c703e1eccc50f1931c20b5d91c2d2c8f265df8d7d"
+    },
+    "postgres-pro": {
+      "source": "jeffallan/claude-skills",
+      "sourceType": "github",
+      "skillPath": "skills/postgres-pro/SKILL.md",
+      "computedHash": "77689dac16b4961c653ee44a7d2821f0c58d546a071ff958398048c8c234cb31"
+    },
+    "python-development": {
+      "source": "laurigates/claude-plugins",
+      "sourceType": "github",
+      "skillPath": "python-plugin/skills/python-development/SKILL.md",
+      "computedHash": "f6878352aa5d77fbc61c915da53f33c8b563342f0f9c2715a13052a27fe0228c"
+    },
+    "qdrant-search-quality": {
+      "source": "qdrant/skills",
+      "sourceType": "github",
+      "skillPath": "skills/qdrant-search-quality/SKILL.md",
+      "computedHash": "c93e31e317e4a603668a823e07e9f50b8560b0c88980a50e354e4155f345498c"
+    },
+    "security-testing": {
+      "source": "petrkindlmann/qa-skills",
+      "sourceType": "github",
+      "skillPath": "skills/security-testing/SKILL.md",
+      "computedHash": "4fd32808e67fdeeb8d3b94df416baeace4431b1b66f04b38ee128f55136c0993"
+    }
+  }
+}

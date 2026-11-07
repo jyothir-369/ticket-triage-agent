@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
-from typing import Literal
+from typing import List, Literal, Union
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -195,7 +195,7 @@ class Settings(BaseSettings):
 
     # ── Embedding Provider ─────────────────────────────────────────────────────
 
-    embedding_provider: Literal["openai", "sentence_transformer"] | None = Field(
+    embedding_provider: Literal["openai", "sentence_transformer", "gemini"] | None = Field(
         default=None,
         description=(
             "Embedding backend to use. When None, auto-selects based on "
@@ -286,8 +286,46 @@ class Settings(BaseSettings):
         description="Path to the labeled eval ticket fixture (JSON).",
     )
 
-    # ── Dashboard Authentication ────────────────────────────────────────────────
+    # ── Reply Delivery (Email / Webhook) ─────────────────────────────────────────
 
+    reply_delivery_provider: Literal["none", "email", "webhook"] = Field(
+        default="none",
+        description="Outbound reply delivery mechanism (FR4: human-approved replies only).",
+    )
+    smtp_host: str = Field(
+        default="localhost",
+        description="SMTP host for reply delivery via email.",
+    )
+    smtp_port: int = Field(
+        default=587,
+        ge=1,
+        le=65535,
+        description="SMTP port for reply delivery via email.",
+    )
+    smtp_user: str = Field(
+        default="",
+        description="SMTP username (empty for no-auth relays).",
+    )
+    smtp_password: str = Field(
+        default="",
+        description="SMTP password / app password for reply delivery via email.",
+    )
+    smtp_from_address: str = Field(
+        default="support@noreply.example.com",
+        description="From address for outbound reply emails.",
+    )
+    reply_webhook_url: str | None = Field(
+        default=None,
+        description="HMAC-signed webhook endpoint that receives approved replies (POST).",
+    )
+    reply_delivery_timeout_seconds: int = Field(
+        default=10,
+        ge=1,
+        le=60,
+        description="Timeout for outbound reply delivery attempts.",
+    )
+
+    # ── Dashboard Authentication ────────────────────────────────────────────────
     dashboard_username: str = Field(
         default="admin",
         description="Username for Streamlit dashboard login (v1 placeholder auth).",
@@ -296,6 +334,43 @@ class Settings(BaseSettings):
         default="admin",
         description="Password for Streamlit dashboard login (v1 placeholder auth).",
     )
+    dashboard_api_key: str = Field(
+        default="",
+        description=(
+            "Internal API key used by the dashboard to authenticate against the "
+            "backend. In production this MUST be set and is checked at startup; "
+            "an empty value blocks boot entirely."
+        ),
+    )
+
+    # ── API Authentication ───────────────────────────────────────────────────
+
+    api_keys: Union[List[str], str] = Field(
+        default="",
+        description=(
+            "Valid API keys for ticket endpoints — comma-separated ('abc,def') "
+            "or JSON list ('['abc','def']). Leave empty to disable auth."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _normalize_api_keys(self) -> Settings:
+        """Accept raw string or JSON-list and store as a proper list."""
+        v = self.api_keys
+        if not isinstance(v, str):
+            return self
+        s = v.strip()
+        if s == "":
+            self.api_keys = []
+            return self
+        if s.startswith("["):
+            import json
+            result = json.loads(s)
+            self.api_keys = [x.strip() for x in result if x] if isinstance(result, list) else []
+        else:
+            self.api_keys = [x.strip() for x in s.split(",") if x.strip()]
+        return self
+
 
     # ── Validators ──────────────────────────────────────────────────────────────
 
@@ -364,6 +439,13 @@ class Settings(BaseSettings):
             if "localhost" in self.database_url or "127.0.0.1" in self.database_url:
                 raise ValueError(
                     "In production, DATABASE_URL must not point to localhost"
+                )
+
+            # Dashboard API key is mandatory for internal dashboard→backend auth
+            if not self.dashboard_api_key:
+                raise ValueError(
+                    "In production, DASHBOARD_API_KEY must be set (the dashboard "
+                    "uses it to authenticate every request to the backend)."
                 )
 
         # Warnings (non-fatal)

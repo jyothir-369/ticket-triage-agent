@@ -14,6 +14,13 @@ from pathlib import Path
 
 import pytest
 
+
+def pytest_configure(config):
+    """Register custom markers so @pytest.mark.skip_if_no_llm_keys works."""
+    config.addinivalue_line(
+        "markers", "skip_if_no_llm_keys: skip integration tests when no LLM key is configured"
+    )
+
 from src.eval.harness import EvalHarness
 from src.eval.metrics import (
     AggregateMetrics,
@@ -27,6 +34,18 @@ from src.eval.metrics import (
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fixtures
 # ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _has_llm_keys() -> bool:
+    """Check whether required LLM API keys are configured.
+
+    Returns False if the agent cannot triage against real models, which
+    means the slow eval integration tests should skip rather than fail.
+    """
+    from src.config import Settings, get_settings
+
+    s = get_settings()
+    return bool(s.openai_api_key or s.anthropic_api_key or s.gemini_api_key)
 
 
 @pytest.fixture(scope="session")
@@ -353,7 +372,9 @@ class TestEvalHarness:
     def test_load_tickets(self, eval_harness: EvalHarness, eval_fixture_path: Path):
         """Should load all tickets from the JSONL fixture."""
         tickets = eval_harness.load_tickets()
-        assert len(tickets) == 8
+        assert len(tickets) == 100, (
+            f"Expected 100 tickets in fixture, got {len(tickets)}"
+        )
         assert tickets[0]["id"] == "test-001"
         assert tickets[0]["expected_category"] == "BUG"
 
@@ -390,7 +411,7 @@ class TestEvalHarness:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.slow
+@pytest.mark.skipif(not _has_llm_keys(), reason="no LLM API key configured")
 class TestEvalIntegration:
     """Integration tests that run the full agent against the eval set.
 
@@ -436,9 +457,10 @@ class TestEvalIntegration:
         )
 
     def test_all_tickets_evaluated(self, eval_metrics: AggregateMetrics):
-        """All 8 tickets should have been evaluated."""
-        assert eval_metrics.total == 8, (
-            f"Expected 8 tickets evaluated, got {eval_metrics.total}"
+        """All 100 tickets should have been evaluated."""
+        """All 100 tickets should have been evaluated."""
+        assert eval_metrics.total == 100, (
+            f"Expected 100 tickets evaluated, got {eval_metrics.total}"
         )
 
     def test_no_errors_in_results(self, eval_metrics: AggregateMetrics):

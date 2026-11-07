@@ -53,6 +53,16 @@ class TicketStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class ReplyStatus(str, enum.Enum):
+    """Lifecycle status of an approved reply after the approve endpoint runs."""
+
+    DRAFTED = "drafted"
+    PENDING_APPROVAL = "pending_approval"
+    QUEUED = "queued"
+    SENT = "sent"
+    FAILED = "failed"
+
+
 class StepStatus(str, enum.Enum):
     """Status of an individual trace step."""
 

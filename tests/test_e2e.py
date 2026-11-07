@@ -42,10 +42,10 @@ class TestE2ETicketLifecycle:
         )
 
         with (
-            patch("src.agent.graph.get_classifier") as mock_class,
-            patch("src.agent.graph.get_retriever") as mock_ret,
-            patch("src.agent.graph.get_draft_generator") as mock_draft_gen,
-            patch("src.agent.graph.TicketRepository") as MockRepo,
+            patch("src.services.classification.get_classifier") as mock_class,
+            patch("src.services.retrieval.get_retriever") as mock_ret,
+            patch("src.services.drafting.get_draft_generator") as mock_draft_gen,
+            patch("src.repository.TicketRepository") as MockRepo,
         ):
             mc = MagicMock()
             mc.classify = AsyncMock(return_value=mock_classification)

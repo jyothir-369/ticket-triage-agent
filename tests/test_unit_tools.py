@@ -151,7 +151,7 @@ class TestSearchTickets:
                 source="past_ticket",
             )
         ]
-        with patch("src.tools.registry.get_retriever") as mock_get:
+        with patch("src.services.retrieval.get_retriever") as mock_get:
             mock_retriever = AsyncMock()
             mock_retriever.search = AsyncMock(return_value=mock_docs)
             mock_get.return_value = mock_retriever
@@ -165,7 +165,7 @@ class TestSearchTickets:
 
     @pytest.mark.asyncio
     async def test_search_with_filters(self):
-        with patch("src.tools.registry.get_retriever") as mock_get:
+        with patch("src.services.retrieval.get_retriever") as mock_get:
             mock_retriever = AsyncMock()
             mock_retriever.search = AsyncMock(return_value=[])
             mock_get.return_value = mock_retriever
@@ -181,7 +181,7 @@ class TestSearchTickets:
 
     @pytest.mark.asyncio
     async def test_search_empty_results(self):
-        with patch("src.tools.registry.get_retriever") as mock_get:
+        with patch("src.services.retrieval.get_retriever") as mock_get:
             mock_retriever = AsyncMock()
             mock_retriever.search = AsyncMock(return_value=[])
             mock_get.return_value = mock_retriever
@@ -206,7 +206,7 @@ class TestClassifyTicket:
             confidence=0.90,
             reasoning="Bug detected.",
         )
-        with patch("src.tools.registry.get_classifier") as mock_get:
+        with patch("src.services.classification.get_classifier") as mock_get:
             mock_classifier = MagicMock()
             mock_classifier.classify = AsyncMock(return_value=mock_result)
             mock_get.return_value = mock_classifier
@@ -228,7 +228,7 @@ class TestClassifyTicket:
             confidence=0.80,
             reasoning="Billing question.",
         )
-        with patch("src.tools.registry.get_classifier") as mock_get:
+        with patch("src.services.classification.get_classifier") as mock_get:
             mock_classifier = MagicMock()
             mock_classifier.classify = AsyncMock(return_value=mock_result)
             mock_get.return_value = mock_classifier
@@ -255,7 +255,7 @@ class TestGenerateDraft:
             confidence=0.85,
             reasoning="Standard response.",
         )
-        with patch("src.tools.registry.get_draft_generator") as mock_get:
+        with patch("src.services.drafting.get_draft_generator") as mock_get:
             mock_gen = MagicMock()
             mock_gen.generate = AsyncMock(return_value=mock_draft)
             mock_get.return_value = mock_gen
@@ -281,7 +281,7 @@ class TestGenerateDraft:
             confidence=0.80,
             reasoning="Bug response.",
         )
-        with patch("src.tools.registry.get_draft_generator") as mock_get:
+        with patch("src.services.drafting.get_draft_generator") as mock_get:
             mock_gen = MagicMock()
             mock_gen.generate = AsyncMock(return_value=mock_draft)
             mock_get.return_value = mock_gen
@@ -311,7 +311,7 @@ class TestGenerateDraft:
             confidence=0.70,
             reasoning="No context available.",
         )
-        with patch("src.tools.registry.get_draft_generator") as mock_get:
+        with patch("src.services.drafting.get_draft_generator") as mock_get:
             mock_gen = MagicMock()
             mock_gen.generate = AsyncMock(return_value=mock_draft)
             mock_get.return_value = mock_gen

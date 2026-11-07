@@ -257,9 +257,37 @@ class TicketRetriever:
         """Create the collection with correct vector size if it doesn't exist.
 
         Also creates payload indexes on metadata fields used for filtering.
+
+        Validates that ``VECTOR_SIZE`` matches the active embedding provider's
+        dimension. Raises a loud, descriptive ``ValueError`` on mismatch so the
+        pipeline does not silently break (a 384-dim provider against a 1536-col
+        collection fails at upsert time or creation, with no clear signal).
+        Existing collections are never altered or recreated.
         """
         if self._collection_ensured:
             return
+
+        # Resolve the active provider's dimension and compare against
+        # the declared collection size. Fail loudly rather than force-creating
+        # a collection of the wrong dimension.
+        try:
+            from src.services.embedding import get_embedding_provider
+
+            active_dim = get_embedding_provider(use_cache=False).get_dimension()
+        except Exception:
+            active_dim = None
+
+        if active_dim is not None and active_dim != self.VECTOR_SIZE:
+            raise ValueError(
+                f"Embedding dimension mismatch: the configured collection "
+                f"'{self.COLLECTION_NAME}' will be created with vector_size="
+                f"{self.VECTOR_SIZE}, but the active embedding provider emits "
+                f"vectors of dimension {active_dim}. "
+                f"Set 'embedding_vector_size' to {active_dim} or select a "
+                f"provider whose get_dimension() matches. Existing collections "
+                f"are left untouched — an incorrect-sized collection causes "
+                f"upserts to fail at indexing time."
+            )
 
         existing = [c.name for c in self.client.get_collections().collections]
         if self.COLLECTION_NAME not in existing:
@@ -356,10 +384,10 @@ class TicketRetriever:
         Logs degradation events for monitoring.
         """
         # Check circuit breaker
-        if self._circuit_breaker.state.value != "closed":
+        if self._circuit_breaker.is_open:
             logger.warning(
                 "retrieval.degraded.circuit_breaker_open",
-                state=self._circuit_breaker.state.value,
+                state=self._circuit_breaker.state,
                 failure_count=self._circuit_breaker._failure_count,
             )
             return []
@@ -491,11 +519,11 @@ class TicketRetriever:
         Returns True on success, False on failure.
         Logs degradation when circuit breaker is open.
         """
-        if self._circuit_breaker.state.value != "closed":
+        if self._circuit_breaker.is_open:
             logger.warning(
                 "retrieval.degraded.circuit_open_skip_index",
                 doc_id=doc_id,
-                state=self._circuit_breaker.state.value,
+                state=self._circuit_breaker.state,
             )
             return False
 
@@ -548,7 +576,7 @@ class TicketRetriever:
 
         Returns ``{"indexed": N, "failed": M}`` counts.
         """
-        if not self._circuit_breaker.allow_request():
+        if self._circuit_breaker.is_open:
             logger.warning("retrieval.circuit_open_skip_bulk")
             return {"indexed": 0, "failed": len(documents)}
 
@@ -697,7 +725,7 @@ async def search_similar_tickets(
     )
     return [
         RetrievedDoc(
-            ticket_id=int(d.metadata.get("ticket_id", d.id)),
+            ticket_id=_safe_int(d.metadata.get("ticket_id", d.id)),
             subject=d.metadata.get("subject", ""),
             body=d.content,
             score=d.similarity_score,
@@ -705,6 +733,14 @@ async def search_similar_tickets(
         )
         for d in docs
     ]
+
+
+def _safe_int(value: object) -> int:
+    """Convert value to int safely; return 0 if not convertible (e.g., UUIDs)."""
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return 0
 
 
 async def ingest_ticket_embedding(

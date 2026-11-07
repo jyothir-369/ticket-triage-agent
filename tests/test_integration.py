@@ -61,10 +61,10 @@ class TestAgentPipelineIntegration:
         )
 
         with (
-            patch("src.agent.graph.get_classifier") as mock_class,
-            patch("src.agent.graph.get_retriever") as mock_ret,
-            patch("src.agent.graph.get_draft_generator") as mock_draft_gen,
-            patch("src.agent.graph.TicketRepository") as MockRepo,
+            patch("src.services.classification.get_classifier") as mock_class,
+            patch("src.services.retrieval.get_retriever") as mock_ret,
+            patch("src.services.drafting.get_draft_generator") as mock_draft_gen,
+            patch("src.repository.TicketRepository") as MockRepo,
         ):
             mock_classifier = MagicMock()
             mock_classifier.classify = AsyncMock(return_value=mock_classification)
@@ -126,10 +126,10 @@ class TestAgentPipelineIntegration:
         )
 
         with (
-            patch("src.agent.graph.get_classifier") as mock_class,
-            patch("src.agent.graph.get_retriever") as mock_ret,
-            patch("src.agent.graph.get_draft_generator") as mock_draft_gen,
-            patch("src.agent.graph.TicketRepository") as MockRepo,
+            patch("src.services.classification.get_classifier") as mock_class,
+            patch("src.services.retrieval.get_retriever") as mock_ret,
+            patch("src.services.drafting.get_draft_generator") as mock_draft_gen,
+            patch("src.repository.TicketRepository") as MockRepo,
         ):
             mock_classifier = MagicMock()
             mock_classifier.classify = AsyncMock(return_value=low_conf_class)
@@ -146,6 +146,7 @@ class TestAgentPipelineIntegration:
             mock_repo = MagicMock()
             mock_repo.update_ticket_status = AsyncMock()
             mock_repo.update_ticket = AsyncMock()
+            mock_repo.save_triage_result = AsyncMock()
             MockRepo.return_value = mock_repo
 
             executor = AgentExecutor()
@@ -182,10 +183,10 @@ class TestAgentPipelineIntegration:
         )
 
         with (
-            patch("src.agent.graph.get_classifier") as mock_class,
-            patch("src.agent.graph.get_retriever") as mock_ret,
-            patch("src.agent.graph.get_draft_generator") as mock_draft_gen,
-            patch("src.agent.graph.TicketRepository") as MockRepo,
+            patch("src.services.classification.get_classifier") as mock_class,
+            patch("src.services.retrieval.get_retriever") as mock_ret,
+            patch("src.services.drafting.get_draft_generator") as mock_draft_gen,
+            patch("src.repository.TicketRepository") as MockRepo,
         ):
             mock_classifier = MagicMock()
             mock_classifier.classify = AsyncMock(return_value=mock_classification)
@@ -233,10 +234,10 @@ class TestRunTriageIntegration:
         )
 
         with (
-            patch("src.agent.graph.get_classifier") as mock_class,
-            patch("src.agent.graph.get_retriever") as mock_ret,
-            patch("src.agent.graph.get_draft_generator") as mock_draft_gen,
-            patch("src.agent.graph.TicketRepository") as MockRepo,
+            patch("src.services.classification.get_classifier") as mock_class,
+            patch("src.services.retrieval.get_retriever") as mock_ret,
+            patch("src.services.drafting.get_draft_generator") as mock_draft_gen,
+            patch("src.repository.TicketRepository") as MockRepo,
         ):
             mock_classifier = MagicMock()
             mock_classifier.classify = AsyncMock(return_value=mock_classification)
@@ -348,10 +349,10 @@ class TestAgentStateTransitions:
         )
 
         with (
-            patch("src.agent.graph.get_classifier") as mc,
-            patch("src.agent.graph.get_retriever") as mr,
-            patch("src.agent.graph.get_draft_generator") as md,
-            patch("src.agent.graph.TicketRepository") as MockRepo,
+            patch("src.services.classification.get_classifier") as mc,
+            patch("src.services.retrieval.get_retriever") as mr,
+            patch("src.services.drafting.get_draft_generator") as md,
+            patch("src.repository.TicketRepository") as MockRepo,
         ):
             mc_val = MagicMock()
             mc_val.classify = AsyncMock(return_value=mock_class)

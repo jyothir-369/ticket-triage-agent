@@ -46,6 +46,9 @@ def _set_testing_env() -> Generator[None, None, None]:
     """Set TESTING=True for the entire test session."""
     old = os.environ.get("TESTING")
     os.environ["TESTING"] = "True"
+    # Allow the API key header on all tests so the router-level dependency
+    # check passes without having to mock individual tests.
+    os.environ.setdefault("API_KEYS", "test-key")
     yield
     if old is None:
         os.environ.pop("TESTING", None)
@@ -111,7 +114,11 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     app.dependency_overrides[get_db_session] = _override_get_db
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-API-Key": "test-key"},
+    ) as ac:
         yield ac
 
     app.dependency_overrides.clear()

@@ -50,6 +50,16 @@ class TicketStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class ReplyStatus(str, enum.Enum):
+    """Lifecycle status of an approved reply, independent of the ticket status."""
+
+    DRAFTED = "drafted"
+    PENDING_APPROVAL = "pending_approval"
+    QUEUED = "queued"
+    SENT = "sent"
+    FAILED = "failed"
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # ORM Model
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -144,6 +154,12 @@ class TicketModel(Base):
         String(50),
         nullable=True,
         comment="Outcome of human review (approved/rejected/reassigned)",
+    )
+    reply_status: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+        default=ReplyStatus.PENDING_APPROVAL.value,
+        comment="Status of the approved reply after the approve endpoint runs.",
     )
 
     # ── Relationships ─────────────────────────────────────────────────────────────

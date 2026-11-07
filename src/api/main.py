@@ -139,14 +139,39 @@ app = FastAPI(
 
 
 # ---------------------------------------------------------------------------
-# CORS middleware
+# CORS middleware — restrict origins to environment-specific allow-list
 # ---------------------------------------------------------------------------
+
+def _get_cors_origins() -> list[str]:
+    """Return environment-appropriate CORS origin list.
+
+    Development: open to any origin (for browser devtools).
+    Staging: limited to staging domains.
+    Production: explicitly named production front-ends only.
+    """
+    env = settings.environment
+    if env == "development":
+        return ["http://localhost:3000", "http://localhost:8501"]
+    elif env == "staging":
+        return ["http://staging-app.example.com"]
+    else:  # production
+        return [
+            "https://support-dashboard.example.com",
+            "https://app.support-triage.example.com",
+        ]
+
+_ALLOWED_ORIGINS = _get_cors_origins()
+
+if "*" in _ALLOWED_ORIGINS:
+    origins = ["*"]
+else:
+    origins = _ALLOWED_ORIGINS
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 

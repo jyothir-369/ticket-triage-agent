@@ -127,12 +127,13 @@ class CircuitBreaker:
         )
 
     @property
-    def state(self) -> CircuitState:
-        """Current state of the circuit breaker.
+    def state(self) -> str:
+        """Current state as a string ('closed', 'open', 'half_open').
 
         Automatically transitions from OPEN to HALF_OPEN when timeout expires.
         """
-        if self._state == CircuitState.OPEN:
+        raw = self._state.value if isinstance(self._state, CircuitState) else str(self._state)
+        if raw == "open":
             elapsed = time.monotonic() - self._last_failure_time
             if elapsed >= self.timeout:
                 self._state = CircuitState.HALF_OPEN
@@ -142,29 +143,34 @@ class CircuitBreaker:
                     name=self.name,
                     elapsed_seconds=round(elapsed, 2),
                 )
-        return self._state
+                return "half_open"
+        return raw
 
     @property
     def is_closed(self) -> bool:
         """Return True when the circuit is closed (allowing requests)."""
-        return self.state == CircuitState.CLOSED
+        return self.state == "closed"
 
     @property
     def is_open(self) -> bool:
         """Return True when the circuit is open (rejecting requests)."""
-        return self.state == CircuitState.OPEN
+        return self.state == "open"
 
     @property
     def is_half_open(self) -> bool:
         """Return True when the circuit is half-open (testing recovery)."""
-        return self.state == CircuitState.HALF_OPEN
+        return self.state == "half_open"
+
+    def allow_request(self) -> bool:
+        """Return True if a request is allowed through (circuit not open)."""
+        return not self.is_open
 
     @property
     def stats(self) -> dict[str, Any]:
         """Return current circuit breaker statistics."""
         return {
             "name": self.name,
-            "state": self.state.value,
+            "state": self.state,
             "failure_count": self._failure_count,
             "success_count": self._success_count,
             "total_calls": self._total_calls,
@@ -174,12 +180,17 @@ class CircuitBreaker:
             "last_failure_time": self._last_failure_time,
         }
 
+    def _norm_state(self) -> str:
+        """Normalise _state to a string for internal comparisons."""
+        return self._state.value if isinstance(self._state, CircuitState) else str(self._state)
+
     def record_success(self) -> None:
         """Record a successful call."""
         self._total_calls += 1
         self._total_successes += 1
 
-        if self._state == CircuitState.HALF_OPEN:
+        st = self._norm_state()
+        if st == "half_open":
             self._success_count += 1
             self._half_open_calls += 1
 
@@ -192,7 +203,7 @@ class CircuitBreaker:
                     name=self.name,
                     reason="half_open_recovery",
                 )
-        elif self._state == CircuitState.CLOSED:
+        elif st == "closed":
             # Reset failure count on success
             self._failure_count = 0
 
@@ -203,7 +214,8 @@ class CircuitBreaker:
         self._failure_count += 1
         self._last_failure_time = time.monotonic()
 
-        if self._state == CircuitState.HALF_OPEN:
+        st = self._norm_state()
+        if st == "half_open":
             # Failure during half-open → back to open
             self._state = CircuitState.OPEN
             logger.warning(
@@ -212,7 +224,7 @@ class CircuitBreaker:
                 reason="half_open_failure",
                 failure_count=self._failure_count,
             )
-        elif self._state == CircuitState.CLOSED:
+        elif st == "closed":
             if self._failure_count >= self.failure_threshold:
                 self._state = CircuitState.OPEN
                 logger.warning(
@@ -260,9 +272,7 @@ class CircuitBreaker:
         Exception
             Any exception raised by the wrapped function.
         """
-        current_state = self.state
-
-        if current_state == CircuitState.OPEN:
+        if self.is_open:
             self._total_rejected += 1
             raise CircuitBreakerOpen(
                 self.name,
@@ -285,8 +295,7 @@ class CircuitBreaker:
 
     def __enter__(self) -> CircuitBreaker:
         """Enter context manager — check if circuit is open."""
-        current_state = self.state
-        if current_state == CircuitState.OPEN:
+        if self.is_open:
             self._total_rejected += 1
             raise CircuitBreakerOpen(
                 self.name,

@@ -14,9 +14,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agent.graph import AgentExecutor
+from src.api.dependencies import get_settings_dep, verify_api_key
 from src.config import get_settings
 from src.models.database import get_db_session, get_session
 from src.models.schemas import (
+    ReplyStatus as ReplyStatus,
     Ticket,
 )
 from src.models.ticket import (
@@ -31,7 +33,11 @@ from src.repository import TicketRepository
 logger = structlog.get_logger(__name__)
 settings = get_settings()
 
-router = APIRouter(prefix="/tickets", tags=["tickets"])
+router = APIRouter(
+    prefix="/tickets",
+    tags=["tickets"],
+    dependencies=[Depends(verify_api_key)],
+)
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +103,10 @@ class TicketStatusResponse(BaseModel):
     category: str | None = None
     urgency: str | None = None
     confidence: float | None = None
+    reply_status: str | None = Field(
+        default=None,
+        description="Lifecycle status of an approved reply (drafted/pending_approval/queued/sent/failed).",
+    )
     created_at: str
     updated_at: str
     processed_at: str | None = None
@@ -147,6 +157,10 @@ class ApproveResponse(BaseModel):
     ticket_id: str
     status: str
     message: str
+    reply_status: str = Field(
+        default=ReplyStatus.PENDING_APPROVAL.value,
+        description="Lifecycle status of the approved reply after delivery (queued/sent/failed).",
+    )
 
 
 class EscalateRequest(BaseModel):
@@ -358,6 +372,7 @@ async def _run_triage_background(ticket_id: str) -> None:
     status_code=201,
     summary="Create a new support ticket",
     description="Stores a new ticket in the database with PENDING status and returns the ticket ID.",
+    dependencies=[Depends(verify_api_key)],
 )
 async def create_ticket(
     request: CreateTicketRequest,
@@ -442,13 +457,12 @@ async def triage_ticket(
     if ticket is None:
         raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
 
-    # Allow triage on new tickets (pending/open) AND re-triage on finished
-    # tickets (resolved/escalated/failed/awaiting_review), but block while
-    # the pipeline is actively running on the ticket.
+    # Allow triage on new tickets (pending/open) AND re-triage on failed or
+    # escalated tickets, but block while the pipeline is actively running,
+    # and block resolved tickets (human-approved, no re-triage without explicit reset).
     if ticket.status not in (
         "pending",
         "open",
-        "resolved",
         "escalated",
         "failed",
         "awaiting_review",
@@ -497,6 +511,7 @@ async def get_ticket_status(
         category=ticket.category,
         urgency=ticket.urgency,
         confidence=ticket.confidence,
+        reply_status=ticket.reply_status,
         created_at=ticket.created_at.isoformat(),
         updated_at=ticket.updated_at.isoformat(),
         processed_at=ticket.processed_at.isoformat() if ticket.processed_at else None,
@@ -621,8 +636,9 @@ async def get_trace(
     response_model=ApproveResponse,
     summary="Approve a draft response",
     description=(
-        "Human approves the draft response, updates status to RESOLVED, "
-        "and mocks sending the reply to the customer."
+        "Human approves the draft response; the reply enters the "
+        "`drafted → pending_approval → queued` lifecycle until delivery "
+        "integration is wired, then transitions to `sent` or `failed`."
     ),
 )
 async def approve_ticket(
@@ -642,6 +658,11 @@ async def approve_ticket(
             detail=f"Ticket {ticket_id} cannot be approved in status '{ticket.status}'",
         )
 
+    # Set reply lifecycle to drafted while human approval is still being
+    # processed — the draft is persisted so it survives triage re-runs and
+    # retrievable from the ticket detail view.
+    from src.models.schemas import ReplyStatus
+    reply_status = ReplyStatus.DRAFTED.value
     now = datetime.now(UTC)
     ticket.status = DBTicketStatus.RESOLVED.value
     ticket.review_decision = "approved"
@@ -655,17 +676,47 @@ async def approve_ticket(
         reviewer=request.reviewer,
     )
 
-    # Mock sending reply to customer
-    logger.info(
-        "ticket.reply_sent",
-        ticket_id=ticket_id,
-        customer=getattr(ticket, "metadata_", None),
+    # Attempt to deliver the approved reply to the customer.
+    metadata = getattr(ticket, "metadata_", None) or {}
+    customer_email = metadata.get("customer_email") if isinstance(metadata, dict) else None
+    draft_text = ticket.draft_text or ""
+
+    from src.services.delivery import deliver_reply
+
+    delivery_result = await deliver_reply(
+        customer_email=customer_email or "",
+        subject=f"Re: Support ticket {ticket_id}",
+        body=draft_text,
     )
+
+    logger.info(
+        "ticket.delivery_result",
+        ticket_id=ticket_id,
+        delivered=delivery_result.delivered,
+        provider=delivery_result.provider,
+        error=delivery_result.error,
+        duration_ms=delivery_result.duration_ms,
+    )
+
+    # Transition the reply lifecycle based on delivery outcome. Without a real
+    # provider wired up, we mark the ticket `queued` rather than `sent`, which
+    # keeps the response honest about pending delivery integration.
+    next_reply_status = ReplyStatus.SENT.value if delivery_result.delivered else ReplyStatus.QUEUED.value
+    try:
+        ticket.reply_status = next_reply_status
+        await db.flush()
+    except Exception as exc:  # pragma: no cover - defensive, SQLite test path
+        logger.warning("ticket.reply_status_persist_failed", ticket_id=ticket_id, error=str(exc))
 
     return ApproveResponse(
         ticket_id=ticket_id,
         status="resolved",
-        message="Draft approved and reply sent to customer.",
+        message=(
+            f"Draft approved and reply sent to customer."
+            if delivery_result.delivered
+            else "Draft approved. Reply queued for delivery."
+        ),
+        reply_status=next_reply_status,
     )
 
 

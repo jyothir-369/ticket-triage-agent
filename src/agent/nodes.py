@@ -747,6 +747,34 @@ async def finalize_node(state: AgentState) -> dict:
             escalation=escalation_dict,
         )
 
+        # Index the resolved ticket into Qdrant for future retrieval
+        ticket: Ticket | None = state.get("ticket")
+        if ticket and ticket.content:
+            try:
+                from src.services.retrieval import get_retriever
+                retriever = get_retriever()
+                indexed = await retriever.add_document(
+                    doc_id=ticket_id,
+                    content=ticket.content,
+                    metadata={
+                        "ticket_id": ticket_id,
+                        "category": classification_dict.get("category", "other"),
+                        "urgency": classification_dict.get("urgency", "medium"),
+                        "source": ticket.source,
+                        "status": final_status.value if hasattr(final_status, "value") else str(final_status),
+                    },
+                )
+                if not indexed:
+                    log.warning("node.finalize.qdrant_index_failed", ticket_id=ticket_id)
+                else:
+                    log.debug("node.finalize.qdrant_indexed", ticket_id=ticket_id)
+            except Exception as exc:
+                log.warning(
+                    "node.finalize.qdrant_index_error",
+                    ticket_id=ticket_id,
+                    error=str(exc),
+                )
+
         # Determine final status
         final_status = (
             TicketStatus.ESCALATED if should_escalate else TicketStatus.RESOLVED

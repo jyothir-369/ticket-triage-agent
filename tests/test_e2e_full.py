@@ -269,9 +269,10 @@ class TestErrorPath:
             # Provide thread_id for the checkpointer
             final_state = await executor.run(ticket, config={"configurable": {"thread_id": str(ticket.id)}})
 
-            # Should escalate due to failures
+            # Should escalate due to repeated failures
             assert final_state["should_escalate"] is True
-            assert final_state["tool_call_count"] > 0
+            assert final_state["loop_count"] >= 1
+            assert final_state["error_message"] != ""
 
     @pytest.mark.asyncio
     @pytest.mark.e2e
@@ -571,11 +572,9 @@ class TestObservability:
 
         health = health_resp.json()
         assert "status" in health
-        assert "db" in health
-        assert "qdrant" in health
-        assert "redis" in health
-
-
+        checks = health.get("checks", {})
+        for service_name in ["database", "qdrant", "redis", "llm"]:
+            assert service_name in checks, f"Missing service check: {service_name}"
 # ═══════════════════════════════════════════════════════════════════════════════
 # 8. COMPLETE WORKFLOW: End-to-end scenario
 # ═══════════════════════════════════════════════════════════════════════════════

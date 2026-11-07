@@ -223,13 +223,13 @@ class TicketClassifier:
     def __init__(
         self,
         *,
-        model_name: str = "claude-sonnet-4-20250514",
+        model_name: str | None = None,
         timeout_seconds: float = 10.0,
         max_retries: int = 3,
         confidence_threshold: float = 0.5,
         llm_client: Any | None = None,
     ) -> None:
-        self.model_name = model_name
+        self.model_name = model_name or "claude-sonnet-4-20250514"
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.confidence_threshold = confidence_threshold

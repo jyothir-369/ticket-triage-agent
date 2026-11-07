@@ -76,11 +76,23 @@ def cached_health() -> dict | None:
 
 @st.fragment(run_every=30)
 def health_fragment() -> None:
+    """Status banner driven by ``/health``.
+
+    The backend aggregates per-dependency results into one overall ``status``
+    string ("healthy", "degraded", or "unhealthy"). A FastAPI process that is
+    alive but has a failing dependency returns ``degraded`` or ``unhealthy`` —
+    that does NOT mean the API is unreachable; it means the API is up but one
+    or more dependencies are not meeting expectations. We translate that as
+    "API degraded", while genuine connectivity failures (FastAPI refused the
+    request, timed out, DNS/TCP failure) land under "API offline".
+    """
     health = cached_health()
 
-    if health and health.get("status") == "healthy":
+    if not health:
+        cls, label = "down", "API offline"
+    elif health.get("status") == "healthy":
         cls, label = "healthy", "API healthy"
-    elif health and health.get("status") == "degraded":
+    elif health.get("status") in ("degraded", "unhealthy"):
         cls, label = "degraded", "API degraded"
     else:
         cls, label = "down", "API offline"
@@ -165,6 +177,7 @@ def logout() -> None:
 
 
 def _navigate(page: str) -> None:
+    """Set the application page. Widget-bound radio uses ``nav_radio``."""
     st.session_state["page"] = page
     if page != "queue":
         st.session_state["selected_ticket_id"] = None
@@ -200,9 +213,9 @@ def render_sidebar() -> None:
 
         health_fragment()
 
-        # Shared key = the page itself, so breadcrumbs / actions that set
-        # session_state["page"] are reflected here and vice versa.
-        st.radio(
+        # Separate widget key ("nav_radio") from session-state key ("page")
+        # so widget-bound state and application page state don't collide by name.
+        nav = st.radio(
             "Navigation",
             ["metrics", "queue", "trace"],
             format_func=lambda k: {
@@ -210,9 +223,15 @@ def render_sidebar() -> None:
                 "queue": "📋 Ticket Queue",
                 "trace": "🔍 Trace Viewer",
             }.get(k, k),
-            key="page",
+            key="nav_radio",
             label_visibility="collapsed",
         )
+        # Sync widget value → application page state without mutating st.session_state["page"]
+        # before its keyed widget is instantiated on this run.
+        if nav:
+            st.session_state["page"] = nav
+        else:
+            st.session_state.setdefault("page", "metrics")
 
         st.markdown("---")
 

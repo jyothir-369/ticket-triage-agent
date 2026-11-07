@@ -15,10 +15,12 @@ from src.services.embedding import (
     CircuitBreakerOpenError,
     EmbeddingCache,
     EmbeddingProvider,
+    GeminiEmbeddingProvider,
     OpenAIEmbeddingProvider,
     SentenceTransformerProvider,
     get_embedding_provider,
 )
+from src.services.retrieval import TicketRetriever
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Circuit Breaker
@@ -316,6 +318,10 @@ class TestGetEmbeddingProvider:
         mock_settings.openai_api_key = ""
         mock_settings.embedding_provider = None
         mock_settings.redis_url = "redis://localhost"
+        mock_settings.gemini_api_key = ""
+        mock_settings.embedding_vector_size = 1536
+        mock_settings.redis_max_connections = 10
+        mock_settings.redis_socket_timeout = 5
         provider = get_embedding_provider(use_cache=False)
         assert isinstance(provider, SentenceTransformerProvider)
 
@@ -324,6 +330,10 @@ class TestGetEmbeddingProvider:
         mock_settings.openai_api_key = "sk-test"
         mock_settings.embedding_provider = None
         mock_settings.redis_url = "redis://localhost"
+        mock_settings.gemini_api_key = ""
+        mock_settings.embedding_vector_size = 1536
+        mock_settings.redis_max_connections = 10
+        mock_settings.redis_socket_timeout = 5
         provider = get_embedding_provider(use_cache=False)
         assert isinstance(provider, OpenAIEmbeddingProvider)
 
@@ -334,3 +344,136 @@ class TestGetEmbeddingProvider:
         mock_settings.redis_url = "redis://localhost"
         provider = get_embedding_provider(use_cache=False)
         assert isinstance(provider, SentenceTransformerProvider)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Embedding Dimension Compatibility (regression — B1)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestEmbeddingDimensionCompatibility:
+    """Regression suite for the silent 384/1536 mismatch (PROJECT_AUDIT §7)."""
+
+    # --- get_dimension across all providers ---
+
+    def test_openai_get_dimension_1536(self):
+        provider = OpenAIEmbeddingProvider(api_key="sk-test")
+        assert provider.get_dimension() == 1536
+
+    def test_sentence_transformer_get_dimension_384(self):
+        provider = SentenceTransformerProvider()
+        assert provider.get_dimension() == 384
+
+    def test_gemini_get_dimension_1536(self):
+        provider = GeminiEmbeddingProvider(api_key="gem-test-key")
+        assert provider.get_dimension() == 1536
+
+    def test_gemini_custom_dimension(self):
+        provider = GeminiEmbeddingProvider(api_key="gem-test-key", dimension=768)
+        assert provider.get_dimension() == 768
+
+    # --- factory auto-selection picks the right provider dimension ---
+
+    @patch("src.services.embedding.settings")
+    def test_auto_selects_sentence_transformer_384_without_keys(self, mock_settings):
+        mock_settings.openai_api_key = ""
+        mock_settings.embedding_provider = None
+        mock_settings.gemini_api_key = ""
+        mock_settings.redis_url = "redis://localhost"
+        mock_settings.redis_max_connections = 10
+        mock_settings.redis_socket_timeout = 5
+        provider = get_embedding_provider(use_cache=False)
+        assert isinstance(provider, SentenceTransformerProvider)
+        assert provider.get_dimension() == 384
+
+    @patch("src.services.embedding.settings")
+    def test_auto_selects_openai_1536_when_key_available(self, mock_settings):
+        mock_settings.openai_api_key = "sk-test"
+        mock_settings.embedding_provider = None
+        mock_settings.gemini_api_key = ""
+        mock_settings.redis_url = "redis://localhost"
+        mock_settings.redis_max_connections = 10
+        mock_settings.redis_socket_timeout = 5
+        provider = get_embedding_provider(use_cache=False)
+        assert isinstance(provider, OpenAIEmbeddingProvider)
+        assert provider.get_dimension() == 1536
+
+    @patch("src.services.embedding.settings")
+    def test_auto_selects_gemini_1536_when_gemini_key_available(self, mock_settings):
+        mock_settings.gemini_api_key = "gem-test-key"
+        mock_settings.embedding_provider = None
+        mock_settings.openai_api_key = ""
+        mock_settings.redis_url = "redis://localhost"
+        mock_settings.redis_max_connections = 10
+        mock_settings.redis_socket_timeout = 5
+        mock_settings.embedding_vector_size = 1536
+        provider = get_embedding_provider(use_cache=False)
+        assert isinstance(provider, GeminiEmbeddingProvider)
+        assert provider.get_dimension() == 1536
+
+    # --- ensure_collection_exists mismatch (no silent breakage) ---
+
+    def test_mismatch_raises_valueerror(self):
+        """ST emits 384; collection forced 1536 → ValueError loud."""
+        retriever = TicketRetriever(use_cache=False)
+        mock_client = MagicMock()
+        mock_client.get_collections.return_value.collections = []
+        retriever._client = mock_client
+        TicketRetriever.VECTOR_SIZE = 1536
+
+        with patch(
+            "src.services.embedding.get_embedding_provider",
+            return_value=SentenceTransformerProvider(),
+        ):
+            with pytest.raises(ValueError, match="Embedding dimension mismatch"):
+                retriever.ensure_collection_exists()
+
+    def test_matching_dimensions_no_raise(self):
+        """384 collection and ST provider agree → no exception."""
+        retriever = TicketRetriever(use_cache=False)
+        mock_client = MagicMock()
+        mock_client.get_collections.return_value.collections = []
+        retriever._client = mock_client
+        TicketRetriever.VECTOR_SIZE = 384
+
+        with patch(
+            "src.services.embedding.get_embedding_provider",
+            return_value=SentenceTransformerProvider(),
+        ):
+            retriever.ensure_collection_exists()  # should not raise
+
+    def test_openai_matches_default_collection(self):
+        """OpenAI (1536) vs default collection (1536) → no raise."""
+        retriever = TicketRetriever(use_cache=False)
+        mock_client = MagicMock()
+        mock_client.get_collections.return_value.collections = []
+        retriever._client = mock_client
+        TicketRetriever.VECTOR_SIZE = 1536
+
+        with patch(
+            "src.services.embedding.get_embedding_provider",
+            return_value=OpenAIEmbeddingProvider(api_key="sk-test"),
+        ):
+            retriever.ensure_collection_exists()  # should not raise
+
+    def test_gemini_matches_default_collection(self):
+        """Gemini (1536) vs default collection (1536) → no raise."""
+        retriever = TicketRetriever(use_cache=False)
+        mock_client = MagicMock()
+        mock_client.get_collections.return_value.collections = []
+        retriever._client = mock_client
+        TicketRetriever.VECTOR_SIZE = 1536
+
+        with patch(
+            "src.services.embedding.get_embedding_provider",
+            return_value=GeminiEmbeddingProvider(api_key="gem-test-key"),
+        ):
+            retriever.ensure_collection_exists()  # should not raise
+
+    def test_cached_provider_inherits_active_dimension(self):
+        """Wrapping with cache keeps the underlying provider's dimension."""
+        provider = CachedEmbeddingProvider(
+            provider=SentenceTransformerProvider(),
+            cache=MagicMock(spec=EmbeddingCache),
+        )
+        assert provider.get_dimension() == 384
