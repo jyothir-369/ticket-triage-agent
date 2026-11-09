@@ -369,7 +369,7 @@ class TicketRetriever:
         query: str,
         limit: int = 5,
         filters: dict | None = None,
-        min_score: float = 0.5,
+        min_score: float = settings.min_score,
     ) -> list[RetrievedDocument]:
         """Search Qdrant for documents similar to *query*.
 
@@ -491,6 +491,7 @@ class TicketRetriever:
             docs.append(doc)
 
         # Sort by score descending (Qdrant usually returns sorted, but be safe)
+        docs = [d for d in docs if d.similarity_score >= min_score]
         docs.sort(key=lambda d: d.similarity_score, reverse=True)
 
         logger.info(
@@ -779,7 +780,7 @@ class SearchTicketsInput(BaseModel):
         description="Maximum number of results to return.",
     )
     min_score: float = Field(
-        default=0.5,
+        default_factory=lambda: settings.min_score,
         ge=0.0,
         le=1.0,
         description="Minimum similarity score threshold (0.0 to 1.0).",
@@ -798,7 +799,7 @@ class SearchTicketsInput(BaseModel):
 async def search_tickets(
     query: str,
     limit: int = 5,
-    min_score: float = 0.5,
+    min_score: float = settings.min_score,
     category: str | None = None,
     urgency: str | None = None,
 ) -> list[dict]:
@@ -848,3 +849,12 @@ async def search_tickets(
 
 # Export tool for agent registration
 RETRIEVER_TOOLS = [search_tickets]
+
+
+def ensure_collection_exists() -> None:
+    """Ensure the Qdrant collection exists with the correct vector size.
+
+    Module-level convenience wrapper used by startup readiness checks.
+    """
+    retriever = TicketRetriever(use_cache=False)
+    retriever.ensure_collection_exists()
