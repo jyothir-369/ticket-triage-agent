@@ -126,6 +126,12 @@ async def _deliver_email(
     subject: str,
     body: str,
 ) -> DeliveryResult:
+    """Deliver an approved email reply via SMTP (``SMTP_HOST``/``SMTP_PORT``, ``timeout=settings.reply_delivery_timeout_seconds``).
+
+    Runs the blocking SMTP send inside ``asyncio.to_thread`` to avoid blocking
+    the event loop.  The underlying ``smtplib.SMTP(timeout=...)`` call enforces
+    a hard timeout to prevent slowloris / connection hangs.
+    """
     start = time.monotonic()
     try:
         await asyncio.to_thread(
@@ -174,7 +180,12 @@ async def _deliver_webhook(
     subject: str,
     body: str,
 ) -> DeliveryResult:
-    """POST an approved reply to ``reply_webhook_url`` with HMAC-SHA256 signature."""
+    """POST an approved reply to ``reply_webhook_url`` with HMAC-SHA256 signature.
+
+    Uses ``httpx.AsyncClient(timeout=settings.reply_delivery_timeout_seconds)``
+    to enforce a hard timeout against the customer-supplied endpoint, preventing
+    slowloris attacks.
+    """
     import httpx
 
     if not settings.reply_webhook_url:

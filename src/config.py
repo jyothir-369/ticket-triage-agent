@@ -224,6 +224,12 @@ class Settings(BaseSettings):
             "Tickets below this threshold are escalated to a human."
         ),
     )
+    min_score: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Minimum similarity score threshold for ticket retrieval search.",
+    )
     max_loop_retries: int = Field(
         default=3,
         ge=1,
@@ -343,6 +349,33 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ── External Connector Authentication ────────────────────────────────────
+
+    zendesk_webhook_key: str = Field(
+        default="",
+        description="HMAC-SHA256 secret for Zendesk webhook verification.",
+    )
+    intercom_webhook_key: str = Field(
+        default="",
+        description="HMAC-SHA256 secret for Intercom webhook verification.",
+    )
+    gmail_webhook_key: str = Field(
+        default="",
+        description="HMAC-SHA256 secret for Gmail Pub/Sub webhook verification.",
+    )
+    hemdesk_api_key: str = Field(
+        default="",
+        description="Helmdesk API key (required when calling Helmdesk ingestion endpoint).",
+    )
+    helmdesk_base_url: str | None = Field(
+        default=None,
+        description="Helmdesk base URL override; defaults to https://app.hemldesk.com.",
+    )
+    api_base_url: str = Field(
+        default="http://localhost:8000",
+        description="Public base URL for webhook endpoints (used in /connectors/status).",
+    )
+
     # ── API Authentication ───────────────────────────────────────────────────
 
     api_keys: Union[List[str], str] = Field(
@@ -456,11 +489,16 @@ class Settings(BaseSettings):
                 self.environment,
             )
 
-        if self.redis_url.startswith("redis://") and self.environment == "production":
-            logger.warning(
-                "REDIS_URL uses redis:// (unencrypted) in production. "
-                "Upstash requires rediss:// (TLS)."
-            )
+        if self.environment == "production":
+            if self.redis_url.startswith("redis://"):
+                raise ValueError(
+                    "REDIS_URL uses redis:// (unencrypted) in production. "
+                    "Use rediss:// (TLS) to enforce encrypted Redis connections."
+                )
+            if not self.redis_url.startswith("rediss://"):
+                raise ValueError(
+                    "REDIS_URL must use rediss:// (TLS) scheme in production."
+                )
 
         # Log configured providers (never print actual keys)
         providers = {

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -73,6 +74,54 @@ class TicketRepository:
             await session.refresh(model)
             logger.info("Created ticket %s (source=%s)", model.id, model.source)
             return model
+
+    async def create_from_ingestion_dict(
+        self,
+        *,
+        content: str,
+        source: str,
+        source_id: str,
+        metadata_: str | None = None,
+        status: str = "open",
+    ) -> TicketModel:
+        """Create a ``TicketModel`` from individual ingestion fields.
+
+        Used by external connectors (Zendesk, Intercom, Helmdesk) where the
+        caller does not want to construct a full ``Ticket`` ORM object.
+        **Idempotency**: skips creation when ``source_id`` already present.
+        """
+        from src.models.schemas import Ticket
+
+        ticket = Ticket(
+            id=str(uuid.uuid4()),
+            content=content,
+            source=source,
+            source_id=source_id,
+            metadata_=metadata_,
+            status=TicketStatus(status) if status else TicketStatus.OPEN,
+            created_at=datetime.now(UTC),
+        )
+        return await self.create_ticket(ticket)
+
+    # ── Source-id lookup (idempotency check) ────────────────────────────────────
+
+    async def find_by_source_id(self, source_id: str) -> TicketModel | None:
+        """Return the existing ORM model for a given *source_id*, or ``None``.
+
+        Used by connectors (Zendesk, Intercom, Helmdesk) to skip duplicate
+        tickets on re-ingestion.
+        """
+        async with get_session() as session:
+            result = await session.execute(
+                select(TicketModel).where(TicketModel.source_id == source_id)
+            )
+            return result.scalar_one_or_none()
+
+    async def find_all_source_ids(self) -> list[str]:
+        """Return all distinct source_ids currently in the DB."""
+        async with get_session() as session:
+            result = await session.execute(select(TicketModel.source_id))
+            return [row for row in result.scalars().all()]
 
     # ── Generic update ──────────────────────────────────────────────────────────
 

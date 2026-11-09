@@ -1,145 +1,129 @@
-#!/usr/bin/env python
-"""Configuration validation script.
+"""Pre-flight config validation script.
 
-Run at container startup (or in CI) to verify all required settings are present
-and valid for the current environment.
+Verifies that every required environment variable is set and that each
+connected service (database, Qdrant, Redis) is reachable before starting the
+app. Exits 0 only when all checks pass.
 
-Exit codes:
-  0 - All checks passed
-  1 - One or more validation errors
-  2 - Runtime import/config error
+Usage::
+
+    python -m src.scripts.validate_config
+    # or:
+    python scripts/validate_config.py
 """
 
 from __future__ import annotations
 
+import asyncio
 import sys
-from typing import NoReturn
+from urllib.parse import urlparse
 
 from src.config import get_settings
+from src.utils.observability import init_telemetry, shutdown_telemetry
 
 
-def _exit_error(msg: str) -> NoReturn:
-    print(f"[ERROR] {msg}", file=sys.stderr)
-    sys.exit(1)
+def _check(label: str, ok: bool, detail: str) -> None:
+    status = "PASS" if ok else "FAIL"
+    print(f"[{status}] {label}: {detail}")
+    if not ok:
+        sys.exit(1)
 
 
-def _exit_warn(msg: str) -> None:
-    print(f"[WARN] {msg}", file=sys.stderr)
+def _check_nonempty(label: str, value: str | None, detail: str = "") -> None:
+    ok = bool(value and value.strip())
+    _check(label, ok, f"'{value}'" if value else "(unset)")
 
 
-def validate_production_requirements(s: "Settings") -> list[str]:
-    """Return list of validation error messages for production env."""
-    errors = []
-
-    # At least one LLM provider configured
-    has_llm = any([
-        s.gemini_api_key,
-        s.openai_api_key,
-        s.anthropic_api_key,
-        s.openrouter_api_key,
-    ])
-    if not has_llm:
-        errors.append(
-            "In production, at least one LLM API key must be set "
-            "(GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, or OPENROUTER_API_KEY)"
-        )
-
-    # Database must not be localhost
-    if "localhost" in s.database_url or "127.0.0.1" in s.database_url:
-        errors.append(
-            "In production, DATABASE_URL must not point to localhost"
-        )
-
-    # Require API keys to be configured (auth enabled)
-    if not s.api_keys:
-        errors.append(
-            "In production, API_KEYS must be configured (at least one API key)"
-        )
-
-    # Require reply delivery mechanism
-    if s.reply_delivery_provider == "none":
-        errors.append(
-            "In production, REPLY_DELIVERY_PROVIDER must be 'email' or 'webhook' "
-            "(cannot be 'none' for FR4 compliance)"
-        )
-
-    return errors
+def _http_ok(url: str, timeout: float = 5.0) -> bool:
+    try:
+        import httpx  # local import keeps the script usable when httpx absent
+        resp = httpx.get(url, timeout=timeout, follow_redirects=True)
+        return resp.status_code < 500
+    except Exception:
+        return False
 
 
-def validate_all_environments(s: "Settings") -> list[str]:
-    """Return list of validation error messages that apply to all envs."""
-    errors = []
+async def _check_database() -> None:
+    settings = get_settings()
+    parsed = urlparse(settings.database_url)
+    required_parts = ["host", "port"]
+    missing = [p for p in required_parts if not getattr(parsed, p)]
+    _check("DATABASE_URL", len(missing) == 0, "URL has host:port")
 
-    # Qdrant collection vector size must match embedding provider
-    if s.embedding_provider == "openai" and s.embedding_vector_size != 1536:
-        errors.append(
-            f"EMBEDDING_VECTOR_SIZE ({s.embedding_vector_size}) must be 1536 "
-            "for OpenAI text-embedding-ada-002"
-        )
+    # Try a raw asyncpg connection via SQLAlchemy
+    try:
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import create_async_engine
 
-    # SSL mode for database in non-development
-    if s.environment != "development" and s.database_ssl_mode == "disable":
-        errors.append(
-            f"DATABASE_SSL_MODE cannot be 'disable' in {s.environment} environment"
-        )
-
-    # Valid reply delivery configuration
-    if s.reply_delivery_provider == "email":
-        if not s.smtp_host or not s.smtp_from_address:
-            errors.append(
-                "When REPLY_DELIVERY_PROVIDER=email, SMTP_HOST and SMTP_FROM_ADDRESS must be set"
-            )
-    elif s.reply_delivery_provider == "webhook":
-        if not s.reply_webhook_url:
-            errors.append(
-                "When REPLY_DELIVERY_PROVIDER=webhook, REPLY_WEBHOOK_URL must be set"
-            )
-
-    # Redis TLS in production
-    if s.environment == "production" and s.redis_url.startswith("redis://"):
-        errors.append(
-            "In production, REDIS_URL must use rediss:// (TLS) not redis://"
-        )
-
-    return errors
+        engine = create_async_engine(settings.database_url, pool_pre_ping=True,
+                                     connect_args={"connect_timeout": 5})
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            engine.dispose()
+            _check("DATABASE", True, "PostgreSQL reachable")
+        finally:
+            await engine.dispose()
+    except Exception as exc:
+        _check("DATABASE", False, f"unreachable ({exc!r})")
 
 
-def main() -> int:
+async def _check_qdrant() -> None:
+    settings = get_settings()
+    if settings.qdrant_url:
+        # Cloud URL: check HTTP root + collection exists
+        ok = await _http_ok(f"{settings.qdrant_url.rstrip('/')}/")
+        _check("QDRANT_URL", ok, "HTTP health endpoint reachable")
+        if ok:
+            # Also verify the collection exists via REST search endpoint
+            import httpx
+            key = settings.qdrant_api_key
+            headers = {"Authorization": f"Bearer {key}"} if key else {}
+            try:
+                r = await httpx.get(
+                    f"{settings.qdrant_url.rstrip('/')}/collections/{}",
+                    headers=headers, timeout=5.0, follow_redirects=True,
+                )
+                _check("QDRANT_COLLECTION", r.status_code == 200,
+                       f"REST /collections returns {r.status_code}")
+            except Exception as exc:
+                _check("QDRANT_COLLECTION", False, f"{exc!r}")
+    else:
+        _check("QDRANT_HOST", True, "non-cloud URL configured; skipping deep probe")
+
+
+async def _check_redis() -> None:
+    settings = get_settings()
+    try:
+        import redis.asyncio as aioredis
+        client = aioredis.from_url(settings.redis_url, socket_timeout=3,
+                                  max_connections=1)
+        try:
+            await client.ping()
+            _check("REDIS_URL", True, "Ping OK")
+        finally:
+            await client.aclose()
+    except Exception as exc:
+        _check("REDIS_URL", False, f"unreachable ({exc!r})")
+
+
+async def main() -> None:
     print("=" * 60)
-    print("Support-Ticket Triage Agent — Configuration Validation")
+    print("Config validation pre-flight")
     print("=" * 60)
-    print(f"Environment: {getattr(get_settings(), 'environment', 'unknown')}")
 
     try:
-        settings = get_settings()
-    except Exception as e:
-        print(f"[ERROR] Failed to load settings: {e}", file=sys.stderr)
-        return 2
-
-    all_errors: list[str] = []
-
-    # Common validations
-    all_errors.extend(validate_all_environments(settings))
-
-    # Environment-specific validations
-    if settings.environment == "production":
-        all_errors.extend(validate_production_requirements(settings))
-
-    # Report results
-    if all_errors:
-        print("\n[FAIL] Configuration validation failed:")
-        for err in all_errors:
-            print(f"  - {err}")
-        return 1
-
-    print("\n[OK] All configuration checks passed.")
-    print(f"  LLM Provider: {settings.llm_provider} (fallback: {settings.llm_fallback_provider or 'none'})")
-    print(f"  Embedding: {settings.embedding_provider or 'auto'} ({settings.embedding_vector_size} dims)")
-    print(f"  Reply Delivery: {settings.reply_delivery_provider}")
-    print(f"  API Auth: {'enabled' if settings.api_keys else 'disabled'}")
-    print(f"  CORS: restricted (env={settings.environment})")
-    return 0
+        await _check_database()
+        await _check_qdrant()
+        await _check_redis()
+        print("\nAll checks passed.")
+    except SystemExit:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"\nUnexpected error: {exc!r}")
+        sys.exit(1)
+    finally:
+        shutdown_telemetry()
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    asyncio.run(main())

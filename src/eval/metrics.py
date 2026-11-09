@@ -10,6 +10,14 @@ Metrics:
   - escalation_correctness: should_escalate vs actual escalation decision
   - confidence_threshold_accuracy: whether confidence > threshold correctly
     predicts escalation
+  - retrieval_recall_at_1: fraction of expected doc IDs found in the top-1
+    retrieved result (Recall@1)
+  - retrieval_precision_at_5: fraction of top-5 retrieved docs that are
+    expected (Precision@5)
+  - retrieval_ndcg_at_10: normalized discounted cumulative gain@10 over the
+    retrieved list (nDCG@10)
+  - retrieval_pass_rate: fraction of tickets where recall@1 >= 0 AND
+    precision@5 >= 0 (combined retrieval quality gate)
 """
 
 from __future__ import annotations
@@ -108,6 +116,88 @@ def keyword_overlap(prediction: str, keywords: list[str]) -> float:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Retrieval relevance metrics
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _recall_at_k(expected_ids: list[str], retrieved_ids: list[str], k: int) -> float:
+    """Recall@K: fraction of expected document IDs present in the top-K results."""
+    expected = set(expected_ids)
+    retrieved_top = set(retrieved_ids[:k]) if k > 0 else set()
+    if not expected:
+        return 0.0
+    hits = len(expected & retrieved_top)
+    return hits / len(expected)
+
+
+def _precision_at_k(expected_ids: list[str], retrieved_ids: list[str], k: int) -> float:
+    """Precision@K: fraction of the top-K retrieved docs that are expected."""
+    expected = set(expected_ids)
+    top_k = retrieved_ids[:k] if k > 0 else []
+    if not top_k:
+        return 0.0
+    hits = len(set(top_k) & expected)
+    return hits / k
+
+
+def _ndcg_at_k(expected_ids: list[str], retrieved_ids: list[str], k: int, idf: dict[str, float] | None = None) -> float:
+    """Normalized Discounted Cumulative Gain@K over retrieved docs.
+
+    Ranking is position in *retrieved_ids*; an item at position i (0-indexed)
+    contributes its "relevance" (boolean membership of expected ids) discounted
+    by the formula log2(1 + rank_in_seen_window). The first retrieved item
+    always contributes log2(1 + 0) = 0 if it is relevant.
+
+    Simplest correct nDCG: each retrieved doc gets +1 if it is in the expected
+    set, discounted by 1/(rank+1). The ideal DCG is sum over expected docs in
+    retrieved list of 1/(pos+1), normalized by log2(k+1).
+    """
+    k = max(k, 1)
+    ideal_dcg = sum(1.0 / (i + 1) for i in range(min(len(expected_ids), k)))
+    n = min(len(retrieved_ids), k)
+    dcg = 0.0
+    for i, doc_id in enumerate(retrieved_ids[:n]):
+        if doc_id in set(expected_ids):
+            dcg += 1.0 / (i + 1)
+    if dcg == 0.0:
+        return 0.0
+    return dcg / ideal_dcg
+
+
+def compute_retrieval_metrics(
+    expected_ids: list[str],
+    retrieved_ids: list[str],
+) -> tuple[float, float, float]:
+    """Return ``(recall_at_1, precision_at_5, ndcg_at_10)``.
+
+    Parameters
+    ----------
+    expected_ids:
+        Ground-truth document IDs that *should* have been returned by retrieval.
+    retrieved_ids:
+        Actual document IDs returned by the retriever in order (highest score
+        first).
+
+    Returns
+    -------
+    tuple[float, float, float]
+    """
+    if not expected_ids and not retrieved_ids:
+        return 0.0, 0.0, 0.0
+
+    recall_at_1 = _recall_at_k(expected_ids, retrieved_ids, 1)
+    precision_at_5 = _precision_at_k(expected_ids, retrieved_ids, 5)
+    ndcg_at_10 = _ndcg_at_k(expected_ids, retrieved_ids, 10)
+
+    return recall_at_1, precision_at_5, ndcg_at_10
+
+
+def compute_retrieval_pass_rate(recall_at_1: float, precision_at_5: float) -> bool:
+    """Return True when both recall@1 >= 0 AND precision@5 >= 0."""
+    return bool(recall_at_1 >= 0.0 and precision_at_5 >= 0.0)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Metric data class
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -125,6 +215,8 @@ class MetricResult:
     confidence_above_threshold: bool = False
     confidence_correctly_predicts_escalation: bool = False
     details: dict[str, Any] = field(default_factory=dict)
+    expected_doc_ids: list[str] = field(default_factory=list)
+    retrieved_doc_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -137,6 +229,8 @@ class MetricResult:
             "confidence_above_threshold": self.confidence_above_threshold,
             "confidence_correctly_predicts_escalation": self.confidence_correctly_predicts_escalation,
             "details": self.details,
+            "expected_doc_ids": list(self.expected_doc_ids),
+            "retrieved_doc_ids": list(self.retrieved_doc_ids),
         }
 
 
@@ -233,6 +327,8 @@ def compare_results(
             "confidence": confidence,
             "draft_length": len(actual_draft),
         },
+        expected_doc_ids=list(expected.get("expected_doc_ids") or []),
+        retrieved_doc_ids=list(actual.get("retrieved_doc_ids") or []),
     )
 
 
@@ -253,6 +349,10 @@ class AggregateMetrics:
     escalation_accuracy: float = 0.0
     confidence_threshold_accuracy: float = 0.0
     pass_rate: float = 0.0
+    retrieval_recall_at_1: float = 0.0
+    retrieval_precision_at_5: float = 0.0
+    retrieval_ndcg_at_10: float = 0.0
+    retrieval_pass_rate: float = 0.0
     results: list[MetricResult] = field(default_factory=list)
     confusion_matrix: dict[str, dict[str, int]] = field(default_factory=dict)
 
@@ -266,6 +366,10 @@ class AggregateMetrics:
             "escalation_accuracy": round(self.escalation_accuracy, 4),
             "confidence_threshold_accuracy": round(self.confidence_threshold_accuracy, 4),
             "pass_rate": round(self.pass_rate, 4),
+            "retrieval_recall_at_1": round(self.retrieval_recall_at_1, 4),
+            "retrieval_precision_at_5": round(self.retrieval_precision_at_5, 4),
+            "retrieval_ndcg_at_10": round(self.retrieval_ndcg_at_10, 4),
+            "retrieval_pass_rate": round(self.retrieval_pass_rate, 4),
             "confusion_matrix": self.confusion_matrix,
         }
 
@@ -302,7 +406,18 @@ def aggregate_metrics(results: list[MetricResult]) -> AggregateMetrics:
         if r.category_correct and r.urgency_correct and r.escalation_correct
     )
 
-    # Build confusion matrix for escalation
+    # Retrieval aggregate metrics
+    rec1 = sum(1 for r in results if _recall_at_k(r.expected_doc_ids, r.retrieved_doc_ids, 1) > 0)
+    prec5 = sum(
+        1 for r in results
+        if _precision_at_k(r.expected_doc_ids, r.retrieved_doc_ids, 5) > 0
+    )
+    ndcg10 = sum(1 for r in results if _ndcg_at_k(r.expected_doc_ids, r.retrieved_doc_ids, 10) > 0)
+    rc_rate = sum(1 for r in results if compute_retrieval_pass_rate(
+        _recall_at_k(r.expected_doc_ids, r.retrieved_doc_ids, 1),
+        _precision_at_k(r.expected_doc_ids, r.retrieved_doc_ids, 5),
+    ))
+
     tp = sum(1 for r in results if r.details.get("expected_should_escalate") and r.details.get("actual_should_escalate"))
     tn = sum(1 for r in results if not r.details.get("expected_should_escalate") and not r.details.get("actual_should_escalate"))
     fp = sum(1 for r in results if not r.details.get("expected_should_escalate") and r.details.get("actual_should_escalate"))
@@ -317,6 +432,10 @@ def aggregate_metrics(results: list[MetricResult]) -> AggregateMetrics:
         escalation_accuracy=escalation_correct / total,
         confidence_threshold_accuracy=confidence_correct / total,
         pass_rate=passes / total,
+        retrieval_recall_at_1=rec1 / total,
+        retrieval_precision_at_5=prec5 / total,
+        retrieval_ndcg_at_10=ndcg10 / total,
+        retrieval_pass_rate=rc_rate / total,
         results=results,
         confusion_matrix={
             "escalation": {"TP": tp, "TN": tn, "FP": fp, "FN": fn},

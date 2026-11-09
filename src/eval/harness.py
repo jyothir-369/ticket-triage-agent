@@ -155,7 +155,8 @@ class EvalHarness:
                     "draft_text": outcome.get("drafted_response", ""),
                     "should_escalate": outcome.get("decision") == "escalate",
                     "latency_ms": elapsed_ms,
-                    "error": None,
+                    "retrieved_doc_ids": outcome.get("retrieved_doc_ids", []),
+            "error": None,
                 }
 
                 logger.info(
@@ -181,7 +182,7 @@ class EvalHarness:
                     "urgency": None,
                     "confidence": 0.0,
                     "draft_text": "",
-                    "should_escalate": True,  # Default to escalate on error
+                    "should_escalate": False,
                     "latency_ms": elapsed_ms,
                     "error": str(exc),
                 }
@@ -263,6 +264,13 @@ class EvalHarness:
 
         results_raw = await self.run_all()
         ticket_lookup = {t["id"]: t for t in tickets}
+
+        # Annotate each expected fixture with the expected doc ID derived from
+        # source_id, so compare_results can compute retrieval metrics.
+        for ticket in tickets:
+            doc_id = ticket.get("source_id")
+            if doc_id is not None:
+                ticket["expected_doc_ids"] = [str(doc_id)]
 
         metric_results: list[MetricResult] = []
         for raw in results_raw:

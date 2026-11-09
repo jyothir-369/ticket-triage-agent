@@ -27,6 +27,15 @@ from src.utils.retry import RateLimitError
 
 logger = structlog.get_logger(__name__)
 
+settings = get_settings()
+
+# Project default model — used when no explicit ``model_name`` is supplied to
+# the constructor so direct construction always yields a stable value that
+# doesn't drift with the configured LLM provider.  Factory functions (get_classifier,
+# _get_model_for_provider) still read the model name from settings based on the
+# active provider so the agent graph always uses the right model per environment.
+DEFAULT_MODEL = "claude-sonnet-4-20250514"
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Prompt Template
@@ -229,7 +238,7 @@ class TicketClassifier:
         confidence_threshold: float = 0.5,
         llm_client: Any | None = None,
     ) -> None:
-        self.model_name = model_name or "claude-sonnet-4-20250514"
+        self.model_name = model_name or DEFAULT_MODEL
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.confidence_threshold = confidence_threshold

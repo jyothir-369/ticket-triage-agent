@@ -84,6 +84,28 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     logger.info("api.startup.db_ready", db=db_host)
 
+    # ── Qdrant collection readiness ─────────────────────────────────────
+    # Block startup (or log clear error) when the tickets collection is
+    # missing or has an incompatible vector size — vector search is core
+    # to the triage pipeline and cannot tolerate a silent no-op.
+    from src.services.retrieval import (
+        TicketRetriever,
+        ensure_collection_exists,
+        get_qdrant_client,
+    )
+
+    try:
+        client = get_qdrant_client()
+        retriever = TicketRetriever(use_cache=False)
+        retriever._client = client
+        ensure_collection_exists()
+    except Exception as exc:
+        logger.error(
+            "api.startup.qdrant_check_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+
     # Set up signal handlers for graceful shutdown
     loop = asyncio.get_running_loop()
 
@@ -241,11 +263,13 @@ async def general_exception_handler(request: Request, exc: Exception):
 
 from datetime import UTC
 
+from src.api.connectors import router as connectors_router  # noqa: E402
 from src.api.dashboard import router as dashboard_router  # noqa: E402
 from src.api.tickets import router as tickets_router  # noqa: E402
 
 app.include_router(tickets_router)
 app.include_router(dashboard_router)
+app.include_router(connectors_router)
 
 
 # ---------------------------------------------------------------------------

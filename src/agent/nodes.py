@@ -196,6 +196,9 @@ async def retrieve_node(state: AgentState) -> dict:
     timeout, connection error), returns an empty document list so the pipeline
     continues with classification + template draft only.  Logs the degradation
     event for monitoring.
+
+    **Loop detection**: increments loop_count on error; escalation triggered
+    if max_loop_retries exceeded.
     """
     ticket_id = _ticket_id(state)
     log = logger.bind(ticket_id=ticket_id)
@@ -224,7 +227,7 @@ async def retrieve_node(state: AgentState) -> dict:
             ticket.content,
             limit=5,
             filters=filters,
-            min_score=0.5,
+            min_score=settings.min_score,
         )
 
         # Serialise for downstream consumption
@@ -336,6 +339,7 @@ async def draft_node(state: AgentState) -> dict:
         ticket: Ticket = state["ticket"]
         classification = state.get("classification")
         raw_docs = state.get("retrieved_docs", [])
+        loop_count = state.get("loop_count", 0) + 1
 
         from src.models.schemas import RetrievedDocument
 
@@ -395,6 +399,7 @@ async def draft_node(state: AgentState) -> dict:
 
         return {
             "draft": draft,
+            "loop_count": loop_count,
             "trace": state["trace"],
         }
 
@@ -404,6 +409,7 @@ async def draft_node(state: AgentState) -> dict:
             "node.draft.llm_failed",
             error=str(exc),
             error_type=type(exc).__name__,
+            loop_count=loop_count,
             duration_ms=elapsed,
         )
 
@@ -424,6 +430,7 @@ async def draft_node(state: AgentState) -> dict:
 
         return {
             "draft": fallback,
+            "loop_count": loop_count,
             "trace": state["trace"],
         }
 
@@ -483,13 +490,16 @@ async def escalate_check_node(state: AgentState) -> dict:
         draft = state.get("draft")
         loop_count = state.get("loop_count", 0)
 
-        # Compute final confidence: weighted average of classification and
-        # draft scores.  When one is missing, fall back to the other or 0.
+        # Compute final confidence as the *maximum* of classification and draft
+        # confidence.  Using the max (rather than a weighted average) means that
+        # either one strong enough signal will prevent the agent from
+        # defaulting to escalation — the right behaviour for triage: a single
+        # confident signal in either domain proves the ticket can be handled.
         class_conf = classification.confidence if classification else 0.0
         draft_conf = draft.confidence if draft else 0.0
 
         if classification is not None and draft is not None:
-            final_confidence = (class_conf * 0.6) + (draft_conf * 0.4)
+            final_confidence = max(class_conf, draft_conf)
         elif classification is not None:
             final_confidence = class_conf
         elif draft is not None:

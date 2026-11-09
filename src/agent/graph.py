@@ -864,6 +864,7 @@ async def run_triage(
 
     classification = final_state.get("classification")
     draft = final_state.get("draft")
+    retrieved = final_state.get("retrieved_docs", [])
 
     return {
         "ticket_id": ticket_id,
@@ -874,4 +875,5 @@ async def run_triage(
         "decision": "escalate" if final_state.get("should_escalate") else "complete",
         "escalation_reason": final_state.get("escalation_reason", ""),
         "latency_ms": elapsed_ms,
+        "retrieved_doc_ids": [str(d.get("id", d.get("source_id", ""))) for d in retrieved],
     }
