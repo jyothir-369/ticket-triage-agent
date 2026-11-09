@@ -38,6 +38,12 @@ logger = structlog.get_logger(__name__)
 
 settings = get_settings()
 
+# Project default model — returned when no explicit ``model_name`` is supplied
+# to the constructor so direct construction always yields a stable value that
+# doesn't drift with the configured LLM provider.  Factory functions (get_draft_generator)
+# still read the model name from settings based on the active provider.
+DEFAULT_MODEL = "claude-sonnet-4-20250514"
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Prompt Template
