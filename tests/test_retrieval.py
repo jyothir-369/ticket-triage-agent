@@ -482,3 +482,121 @@ class TestSearchTicketsTool:
         assert len(results) == 1
         assert results[0]["id"] == "doc-1"
         assert results[0]["similarity_score"] == 0.9
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# T2: Search min_score filtering behavior at real thresholds (0.0, 0.3, 0.5,
+#     0.7, 0.9) and rejection of out-of-range values.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestSearchMinScoreFilterBehavior:
+    """T2 acceptance: search() applies min_score filtering at real
+    values (0.0, 0.3, 0.5, 0.7, 0.9) and rejects out-of-range thresholds."""
+
+    def _make_doc(self, doc_id: str, score: float) -> dict[str, Any]:
+        return {
+            "id": doc_id,
+            "content": f"content of {doc_id}",
+            "body": f"body of {doc_id}",
+            "source": "test",
+            "similarity_score": round(score, 4),
+        }
+
+    @staticmethod
+    def _make_point(doc_id: str, score: float):
+        class _P:
+            def __init__(self, doc_id, score):
+                self.id = doc_id
+                self.payload = {"id": doc_id, "content": f"content of {doc_id}", "body": f"body of {doc_id}", "source": "test", "similarity_score": round(score, 4)}
+                self.score = score
+        return _P(doc_id, score)
+
+    @pytest.mark.asyncio
+    async def test_zero_min_score_returns_all(self):
+        retriever = TicketRetriever(use_cache=False)
+        with (patch("src.services.embedding.get_embedding_provider") as mock_emb, patch.object(retriever, "ensure_collection_exists")):
+            fake_client = MagicMock()
+            fake_points = [self._make_point("d1", 0.9), self._make_point("d2", 0.5), self._make_point("d3", 0.1)]
+            fake_client.query_points.return_value = type("Result", (), {"points": fake_points})()
+            mock_emb.return_value.embed = AsyncMock(return_value=[[0.1] * 1536])
+            with patch.object(retriever, "_client", fake_client):
+                results = await retriever.search("q", limit=5, min_score=0.0)
+        assert len(results) == 3
+        assert [r.id for r in results] == ["d1", "d2", "d3"]
+        assert [r.similarity_score for r in results] == [0.9, 0.5, 0.1]
+
+    @pytest.mark.asyncio
+    async def test_high_threshold_drops_low_scores(self):
+        retriever = TicketRetriever(use_cache=False)
+        with (patch("src.services.embedding.get_embedding_provider") as mock_emb, patch.object(retriever, "ensure_collection_exists")):
+            fake_client = MagicMock()
+            fake_points = [self._make_point("d1", 0.9), self._make_point("d2", 0.5), self._make_point("d3", 0.1)]
+            fake_client.query_points.return_value = type("Result", (), {"points": fake_points})()
+            mock_emb.return_value.embed = AsyncMock(return_value=[[0.1] * 1536])
+            with patch.object(retriever, "_client", fake_client):
+                results = await retriever.search("q", limit=5, min_score=0.9)
+        assert len(results) == 1
+        assert results[0].id == "d1"
+        assert results[0].similarity_score == 0.9
+
+    @pytest.mark.asyncio
+    async def test_midpoint_threshold_selects_cutoff(self):
+        retriever = TicketRetriever(use_cache=False)
+        with (patch("src.services.embedding.get_embedding_provider") as mock_emb, patch.object(retriever, "ensure_collection_exists")):
+            fake_client = MagicMock()
+            fake_points = [self._make_point("d1", 0.9), self._make_point("d2", 0.5), self._make_point("d3", 0.1)]
+            fake_client.query_points.return_value = type("Result", (), {"points": fake_points})()
+            mock_emb.return_value.embed = AsyncMock(return_value=[[0.1] * 1536])
+            with patch.object(retriever, "_client", fake_client):
+                results = await retriever.search("q", limit=5, min_score=0.5)
+        assert len(results) == 2
+        assert [r.id for r in results] == ["d1", "d2"]
+
+    @pytest.mark.asyncio
+    async def test_three_quarter_threshold(self):
+        retriever = TicketRetriever(use_cache=False)
+        with (patch("src.services.embedding.get_embedding_provider") as mock_emb, patch.object(retriever, "ensure_collection_exists")):
+            fake_client = MagicMock()
+            fake_points = [self._make_point("d1", 0.9), self._make_point("d2", 0.6), self._make_point("d3", 0.1)]
+            fake_client.query_points.return_value = type("Result", (), {"points": fake_points})()
+            mock_emb.return_value.embed = AsyncMock(return_value=[[0.1] * 1536])
+            with patch.object(retriever, "_client", fake_client):
+                results = await retriever.search("q", limit=5, min_score=0.7)
+        assert len(results) == 1
+        assert results[0].id == "d1"
+
+    @pytest.mark.asyncio
+    async def test_filter_behavior_consistency_across_thresholds(self):
+        scores = [0.1, 0.3, 0.5, 0.7, 0.9, 0.0]
+        counts = {}
+        for ms in scores:
+            retriever = TicketRetriever(use_cache=False)
+            with (patch("src.services.embedding.get_embedding_provider") as mock_emb, patch.object(retriever, "ensure_collection_exists")):
+                fake_client = MagicMock()
+                fake_points = [self._make_point("d", s) for s in scores]
+                fake_client.query_points.return_value = type("Result", (), {"points": fake_points})()
+                mock_emb.return_value.embed = AsyncMock(return_value=[[0.1] * 1536])
+                with patch.object(retriever, "_client", fake_client):
+                    results = await retriever.search("q", limit=5, min_score=ms)
+            counts[ms] = len(results)
+        assert counts[0.0] >= counts[0.3] >= counts[0.5] >= counts[0.7] >= counts[0.9]
+        assert counts[0.9] == 1
+        assert counts[0.7] == 2
+        assert counts[0.5] == 3
+
+    @pytest.mark.parametrize("invalid_min_score", [-0.1, 1.1, -1.0, 2.0])
+    @patch("src.services.retrieval.settings")
+    @pytest.mark.asyncio
+    async def test_invalid_threshold_rejected(self, mock_settings, invalid_min_score):
+        from pydantic import ValidationError
+        from src.services.retrieval import SearchTicketsInput
+        with pytest.raises(ValidationError):
+            _ = SearchTicketsInput(query="q", min_score=invalid_min_score)
+
+    @pytest.mark.parametrize("valid_min_score", [0.0, 0.3, 0.5, 0.7, 0.9, 1.0])
+    @patch("src.services.retrieval.settings")
+    @pytest.mark.asyncio
+    async def test_valid_thresholds_accepted(self, mock_settings, valid_min_score):
+        from src.services.retrieval import SearchTicketsInput
+        schema = SearchTicketsInput(query="q", min_score=valid_min_score)
+        assert schema.min_score == valid_min_score

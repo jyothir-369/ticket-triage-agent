@@ -178,6 +178,31 @@ class TestClassifyNode:
             assert "error_message" in result
 
 
+@pytest.mark.asyncio
+class TestClassifyFallback:
+    """T5 acceptance: classify_node triggers the heuristic fallback when the
+    primary circuit breaker is open and the LLM path raises CircuitBreakerOpen.
+    """
+
+    @pytest.mark.asyncio
+    async def test_fallback_when_primary_circuit_open(self, sample_agent_state):
+        """When ``call_llm_with_fallback`` raises CircuitBreakerOpen,
+        the real heuristic fallback fires and returns a real classification with
+        confidence > 0. Patch at the source of ``call_llm_with_fallback`` so the
+        real ``TicketClassifier.classify()`` runs end-to-end.
+        """
+        from src.utils.circuit_breaker import CircuitBreakerOpen
+        from src.agent.nodes import classify_node
+
+        # Patch the inner LLM call path so the real classifier falls back
+        with patch("src.services.llm.call_llm_with_fallback", side_effect=CircuitBreakerOpen("primary", 0.0, 60.0)):
+            result = await classify_node(sample_agent_state)
+
+            assert result["classification"] is not None
+            assert result["classification"].confidence > 0
+            assert result["classification"].category == TicketCategory.BUG
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # retrieve_node tests
 # ═══════════════════════════════════════════════════════════════════════════════
