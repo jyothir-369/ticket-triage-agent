@@ -7,10 +7,11 @@ from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from src.models import Base
+from src.models import Base, TicketModel
 from src.models.schemas import (
     DashboardMetrics,
     Ticket,
@@ -427,3 +428,49 @@ class TestAddTraceStep:
 
         trace = await repo.get_ticket_trace("test-001")
         assert trace["steps"][0]["status"] == "running"
+
+
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# T3: Duplicate source_id isolation — two creates of the same source_id
+#     must produce exactly one row in the database.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+class TestDuplicateSourceIdIsolation:
+    """T3 acceptance: create_ticket is idempotent on source_id."""
+
+    async def test_duplicate_source_id_creates_one_row(self, repo: TicketRepository):
+        """Two identical creates return the single existing row, not a second."""
+        first = await repo.create_ticket(_make_ticket(source_id="EM-99900"))
+        assert first.id == "test-001"
+
+        second = await repo.create_ticket(
+            _make_ticket(content="A different content for dup id", source="email", source_id="EM-99900")
+        )
+        # Second create hits the idempotency check — returns the existing row,
+        # preserving original content rather than overwriting it.
+        assert second.id == first.id
+        assert second.source_id == first.source_id
+        assert second.content == first.content  # row never overwritten
+
+    async def test_no_duplicate_row_in_db(self, repo: TicketRepository, db_session):
+        """The underlying DB table holds exactly one row per unique source_id."""
+        await repo.create_ticket(_make_ticket(source_id="EM-11100"))
+        await repo.create_ticket(_make_ticket(content="x", source="email", source_id="EM-11100"))
+        count_rows = await db_session.execute(
+            select(func.count()).select_from(TicketModel).where(TicketModel.source_id == "EM-11100")
+        )
+        assert count_rows.scalar_one() == 1
+
+    async def test_three_creates_still_one_row(self, repo: TicketRepository, db_session):
+        """Triple create → still exactly one row."""
+        for i in range(3):
+            t = await repo.create_ticket(
+                _make_ticket(content=f"iter {i}", source="email", source_id="EM-22200")
+            )
+        count = await db_session.execute(
+            select(func.count()).select_from(TicketModel).where(TicketModel.source_id == "EM-22200")
+        )
+        assert count.scalar_one() == 1
